@@ -1,0 +1,1 @@
+print("Adaptive Learning Platform Started")
