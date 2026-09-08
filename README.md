@@ -1,5 +1,7 @@
 # TRACE
 
+[![CI](https://github.com/tp-shivha-shakthiy/Trace/actions/workflows/ci.yml/badge.svg)](https://github.com/tp-shivha-shakthiy/Trace/actions/workflows/ci.yml)
+
 A developer intelligence platform. TRACE ingests raw developer activity from
 GitHub, normalizes it into deterministic events, persists it asynchronously
 into PostgreSQL, and serves an aggregated developer profile — including a
