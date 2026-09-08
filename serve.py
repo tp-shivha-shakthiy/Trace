@@ -10,8 +10,12 @@ uvicorn. Run::
 
     python serve.py
 
-Use on any platform; it is especially required on Windows.
+Use on any platform; it is especially required on Windows. Honors the
+``$HOST`` and ``$PORT`` environment variables used by hosting providers
+(e.g. Render), defaulting to ``0.0.0.0:8000``.
 """
+
+import os
 
 from app import _loop
 
@@ -20,4 +24,9 @@ _loop.configure_asyncio_policy()
 import uvicorn  # noqa: E402  (imported after the policy is configured)
 
 if __name__ == "__main__":
-    uvicorn.run("app.main:app", host="0.0.0.0", port=8000, reload=False)
+    uvicorn.run(
+        "app.main:app",
+        host=os.getenv("HOST", "0.0.0.0"),
+        port=int(os.getenv("PORT", "8000")),
+        reload=False,
+    )

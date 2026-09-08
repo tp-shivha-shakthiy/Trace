@@ -2,6 +2,7 @@
 
 from functools import lru_cache
 
+from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -23,9 +24,21 @@ class Settings(BaseSettings):
 
     api_v1_prefix: str = "/api/v1"
 
-    # Async SQLAlchemy URL. Example:
-    # postgresql+psycopg://trace:trace@localhost:5432/trace
+    # Async SQLAlchemy URL. Plain ``postgres://`` / ``postgresql://`` URLs
+    # (as used by hosted providers such as Render) are normalized to the
+    # ``postgresql+psycopg://`` driver automatically.
     database_url: str = "postgresql+psycopg://trace:trace@localhost:5432/trace"
+
+    @field_validator("database_url")
+    @classmethod
+    def _normalize_database_url(cls, value: str) -> str:
+        if value.startswith("postgresql+psycopg://"):
+            return value
+        if value.startswith("postgresql://"):
+            return "postgresql+psycopg://" + value[len("postgresql://") :]
+        if value.startswith("postgres://"):
+            return "postgresql+psycopg://" + value[len("postgres://") :]
+        return value
 
     # Optional GitHub Personal Access Token (fine-grained or classic).
     # Without a token the client is unauthenticated (60 req/hour IP limit).
