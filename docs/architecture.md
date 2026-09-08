@@ -1,5 +1,34 @@
 # TRACE Architecture
 
+## Implementation Status (v0.3)
+
+> **v0.3 implements:** a real, runnable FastAPI backend with an end-to-end
+> GitHub → ingestion → async processing → PostgreSQL → developer profile flow.
+> See `README.md` for how to run it.
+
+The *implemented* portion of the design below currently covers:
+
+| Layer / component                 | Status in v0.3 |
+|-----------------------------------|----------------|
+| API / Application (FastAPI)       | ✅ implemented  |
+| Ingestion (GitHub REST backfill)  | ✅ implemented  |
+| Normalization to unified events   | ✅ implemented  |
+| Idempotent event store (Postgres) | ✅ implemented  |
+| Async background ingestion        | ✅ implemented (in-process `asyncio` task pool — **not** Celery/Redis) |
+| Domain baseline (deterministic)   | ✅ implemented (`KeywordDomainInference`, not ML) |
+| Profile API from persisted data   | ✅ implemented  |
+| Docker Compose / local dev        | ✅ implemented  |
+| GitHub OAuth + webhooks           | ⏳ future       |
+| Celery/Redis event processing     | ⏳ future (design retained below) |
+| Temporal skill scoring            | ⏳ future       |
+| Knowledge graph + recommendations | ⏳ future       |
+| ML domain classifier              | ⏳ future (extension point: `DomainInference` protocol) |
+| React frontend                    | ⏳ future       |
+
+The sections below describe the **target** architecture (the product vision).
+Anything marked as in the "Event Processing Layer" (e.g. Celery/Redis, DLQ)
+is aspirational and not yet present in the codebase.
+
 ## Overview
 
 TRACE is a developer intelligence platform. The central architectural principle:
@@ -419,11 +448,11 @@ DOMAIN_NODES --DOMAIN_ADJACENCY_EDGES--> DOMAIN_NODES
 
 ```
 Docker Compose
- +-- frontend
- +-- backend
- +-- postgres
- +-- redis
- +-- celery-worker
+ +-- postgres     ✅ v0.3
+ +-- backend      ✅ v0.3
+ +-- redis        ⏳ future
+ +-- celery-worker ⏳ future
+ +-- frontend     ⏳ future
 ```
 
 ### Production
