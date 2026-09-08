@@ -15,7 +15,7 @@ The *implemented* portion of the design below currently covers:
 | Normalization to unified events   | ✅ implemented  |
 | Idempotent event store (Postgres) | ✅ implemented  |
 | Async background ingestion        | ✅ implemented (in-process `asyncio` task pool — **not** Celery/Redis) |
-| Domain baseline (deterministic)   | ✅ implemented (`KeywordDomainInference`, not ML) |
+| Domain intelligence (deterministic) | ✅ implemented (`KeywordDomainInference`: weighted evidence scores + confidence policy + explicit `evidence` reasons, not ML) |
 | Profile API from persisted data   | ✅ implemented  |
 | Docker Compose / local dev        | ✅ implemented  |
 | GitHub OAuth + webhooks           | ⏳ future       |

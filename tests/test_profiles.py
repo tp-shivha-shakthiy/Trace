@@ -124,6 +124,28 @@ async def test_profile_activity_aggregations(session_factory):
     assert by_name["app"]["event_count"] == 1
 
 
+async def test_profile_includes_domain_signals(session_factory):
+    await seed_developer(session_factory)
+    async with session_factory() as session:
+        profile = await profiles.get_developer_profile(session, "octocat")
+
+    signals = profile["summary"]["domain_signals"]
+    by_domain = {signal["domain"]: signal for signal in signals}
+
+    assert "backend" in by_domain
+    assert "frontend" in by_domain
+
+    backend = by_domain["backend"]
+    assert 0 < backend["score"] <= 1.0
+    assert backend["confidence"] in {"high", "medium", "low"}
+    assert backend["repository_count"] >= 1
+    assert len(backend["evidence"]) >= 1
+    assert any("language" in line for line in backend["evidence"])
+
+    frontend = by_domain["frontend"]
+    assert len(frontend["evidence"]) >= 1
+
+
 async def test_profile_not_found(session_factory):
     async with session_factory() as session:
         with pytest.raises(DeveloperNotFoundError):

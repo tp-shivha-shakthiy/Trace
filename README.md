@@ -308,18 +308,58 @@ testable.
 PostgreSQL (never by calling GitHub at request time). It includes:
 
 - `summary` — total repositories/events, aggregated **languages** (by repo
-  count) and **domains** (aggregated per-repository domains), last activity.
+  count) and **domains** (aggregated per-repository domains), plus the
+  explainable **`domain_signals`** inference result (see below), last
+  activity, per-domain event volume and a 12-month activity trend.
 - `repositories` — per-repo metadata, languages, topics, and inferred domains.
 - `recent_activity` — the latest normalized events.
 
-Domain inference is **deliberately a deterministic baseline**
-(`app/services/domains.py::KeywordDomainInference`) that maps a repository to
-coarse domains like `backend`, `frontend`, `data`, `ml`, `devops`, `mobile`,
-etc. from its languages, topics, and name/description keywords. It is *not*
-an ML model. The `DomainInference` protocol is the clean extension point where
-a future ML classifier can be plugged in without changing the ingestion
-pipeline. The ingestion pipeline only calls the protocol, so the baseline is
-swappable.
+### Domain inference (v0.4 intelligence layer)
+
+TRACE performs **deterministic and explainable domain inference**
+(`app/services/domains.py::KeywordDomainInference`). The
+`DomainInference` protocol is the abstraction boundary: ingestion classifies
+each repository via `infer_repository_domains`, and the profile endpoint
+re-runs developer-level inference via `infer_developer_domains` over the
+persisted evidence.
+
+`summary.domain_signals` answers *"which domains does this developer work in,
+how strong is the evidence, and why?"*:
+
+```json
+{
+  "domain": "backend",
+  "score": 0.82,
+  "confidence": "high",
+  "evidence": [
+    "backend signaled by language evidence (Python) in dev/auth-api, dev/billing",
+    "backend keywords detected (api, backend) in dev/auth-api, dev/billing",
+    "sustained activity: 180 events across 2 backend-related repositories"
+  ],
+  "repository_count": 2
+}
+```
+
+Key points:
+
+- **Signals** come only from persisted fields: language breakdown (byte
+  share), the primary language, topics, name/description keywords, and event
+  activity (activity amplifies an existing signal but never creates one).
+  Scores are summed per domain, normalized to `[0, 1]` and bounded.
+- **`score` is an *evidence score* / estimated relevance, not a skill or
+  proficiency measurement.** Wording in the API and docs keeps this explicit.
+- **`confidence`** (`high`/`medium`/`low`) is policy-based and decoupled from
+  score magnitude, so a lone weak signal can never produce high confidence:
+  *high* requires ≥2 supporting repositories with both language and keyword
+  evidence plus sustained activity; *medium* requires language **and** keyword
+  evidence (one well-described repo) or evidence across ≥2 repositories;
+  everything else is *low*.
+- Every result carries human-readable **`evidence`** reasons generated
+  directly from the data, so the result is auditable.
+- **Sparse metadata** and developers with no useful evidence produce low or no
+  domain signals instead of fabricated ones.
+- The implementation is fully **deterministic**: identical evidence yields
+  identical scores.
 
 ## API endpoints
 
@@ -339,6 +379,8 @@ persisted data into:
 
 - `summary.total_repositories` / `total_events` / `languages`
 - `summary.domains` — repositories per technical domain (baseline classifier)
+- `summary.domain_signals` — scored, explainable domain inference
+  (`domain`, `score`, `confidence`, `evidence`, `repository_count`)
 - `summary.events_by_domain` — activity volume per domain
 - `summary.activity` — event counts per activity type (push, pull_request, …)
 - `summary.events_per_month` — 12-month activity trend
@@ -360,19 +402,26 @@ Interactive docs: `GET /docs` (Swagger UI).
 
 ## Current limitations / future work
 
-**Limitations (v0.3):**
+**Limitations:**
 - The background worker is **in-process**; queued jobs are lost on process
   restart. That is acceptable for local development — a durable broker
   (Celery/Redis, SQS, etc.) is future work.
 - Schema management uses `create_all`, not Alembic migrations.
-- No GitHub **webhooks** (pull-based sync only) and no GitHub **OAuth**.
+- No GitHub **webhooks** (pull-based sync only).
 - Rate limits are handled gracefully but there is no OAuth token refresh.
-- Domain inference is keyword/baseline based, not learned.
+- Domain inference is **deterministic and evidence-based**, not learned. It
+  uses only repository metadata, language breakdowns, topics, and event
+  activity — it does **not** use dependency/package manifests, README content,
+  commit diffs, or third-party starred/contributed repositories, so sparse
+  repos are under-signaled rather than overstated. Scores are evidence
+  signals, **not verified expertise**.
 - No metrics/tracing, no recommendation engine, no frontend.
 
-**Future work (beyond v0.3):**
-- Temporal skill scoring and a knowledge graph (repository metadata → skill
-  evidence → temporal score).
-- Learned/ML domain classifier behind the `DomainInference` protocol.
-- Webhooks + OAuth, durable job broker, Alembic migrations, structured
-  logging/metrics, and a React dashboard.
+**Future work:**
+- **Temporal skill evolution** — how a developer's domains and evidence
+  change over time (recency-weighted scoring, domain trend lines) is future
+  work; today's inference is a static snapshot of the persisted evidence.
+- Learned/ML domain classifier behind the `DomainInference` protocol (ML-based
+  inference is **not** implemented yet).
+- Durable job broker, Alembic migrations, structured logging/metrics, and a
+  React dashboard.

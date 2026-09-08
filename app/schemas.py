@@ -43,6 +43,14 @@ class DomainAggregateResponse(BaseModel):
     repository_names: list[str]
 
 
+class DomainSignalResponse(BaseModel):
+    domain: str
+    score: float
+    confidence: str
+    evidence: list[str]
+    repository_count: int
+
+
 class EventMonthResponse(BaseModel):
     month: str
     events: int
@@ -53,6 +61,7 @@ class DeveloperSummaryResponse(BaseModel):
     total_events: int
     languages: dict[str, int]
     domains: dict[str, DomainAggregateResponse]
+    domain_signals: list[DomainSignalResponse]
     events_by_domain: dict[str, int]
     activity: dict[str, int]
     events_per_month: list[EventMonthResponse]

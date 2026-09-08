@@ -12,12 +12,21 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.errors import DeveloperNotFoundError
 from app.models import Developer, GithubEvent, Repository
-from app.services.domains import DomainAggregate, aggregate_repository_domains
+from app.services.domains import (
+    DomainAggregate,
+    KeywordDomainInference,
+    RepositoryDomainEvidence,
+    aggregate_repository_domains,
+)
 
 RECENT_EVENTS_LIMIT = 10
 TOP_REPOSITORIES_LIMIT = 20
 TOP_LANGUAGES_LIMIT = 10
 ACTIVITY_MONTHS_LIMIT = 12
+
+# Deterministic, stateless inference; recomputed on every profile read from
+# the persisted evidence so results always reflect the latest database state.
+_DEVELOPER_INFERENCE = KeywordDomainInference()
 
 
 def _repo_language_list(repo: Repository) -> list[str]:
@@ -134,6 +143,21 @@ async def get_developer_profile(session: AsyncSession, username: str) -> dict:
 
     last_activity_at = recent_events[0].occurred_at if recent_events else None
 
+    domain_signals = _DEVELOPER_INFERENCE.infer_developer_domains(
+        repositories=[
+            RepositoryDomainEvidence(
+                full_name=repo.full_name,
+                name=repo.name,
+                description=repo.description,
+                primary_language=repo.language,
+                languages=repo.languages or {},
+                topics=repo.topics or [],
+                event_count=events_by_repo.get(repo.id, 0),
+            )
+            for repo in repos
+        ]
+    )
+
     return {
         "username": developer.username,
         "name": developer.name,
@@ -150,6 +174,16 @@ async def get_developer_profile(session: AsyncSession, username: str) -> dict:
             "total_events": total_events,
             "languages": _aggregate_languages(repos),
             "domains": _aggregate_domains(repos),
+            "domain_signals": [
+                {
+                    "domain": signal.domain,
+                    "score": signal.score,
+                    "confidence": signal.confidence,
+                    "evidence": signal.evidence,
+                    "repository_count": signal.repository_count,
+                }
+                for signal in domain_signals
+            ],
             "events_by_domain": events_by_domain,
             "activity": events_by_type,
             "events_per_month": [
