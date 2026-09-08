@@ -22,6 +22,7 @@ from app.config import Settings, get_settings
 from app.database import build_engine, build_session_factory
 from app.errors import register_exception_handlers
 from app.github import GitHubClient
+from app.models import Base
 from app.services.domains import DomainInference
 from app.services.jobs import IngestionJobWorker
 
@@ -58,6 +59,9 @@ def create_app(
 
     @asynccontextmanager
     async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
+        if owns_engine and engine is not None:
+            async with engine.begin() as conn:
+                await conn.run_sync(Base.metadata.create_all)
         await worker.start()
         try:
             yield

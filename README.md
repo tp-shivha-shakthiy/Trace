@@ -176,8 +176,9 @@ This starts PostgreSQL and the FastAPI backend. The API is on
    importing the app, so the launcher applies the `SelectorEventLoop` policy
    first, which the async PostgreSQL drivers require.
 
-> **Table creation:** v0.3 uses a small `trace_schema` helper
-> (`python -m trace_schema`) that runs ``Base.metadata.create_all`` against
+> **Table creation:** tables are created automatically at application startup
+> (`Base.metadata.create_all`). A small `trace_schema` helper
+> (`python -m trace_schema`) is also provided to create them explicitly against
 > `DATABASE_URL`. This is intentionally simpler than Alembic migrations for
 > this milestone.
 
