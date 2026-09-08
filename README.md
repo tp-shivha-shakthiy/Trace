@@ -332,6 +332,17 @@ swappable.
 | GET    | `/api/v1/developers`        | List ingested developers                       |
 | GET    | `/api/v1/developers/{username}` | Aggregated developer profile from PostgreSQL   |
 
+The developer profile (`GET /api/v1/developers/{username}`) aggregates
+persisted data into:
+
+- `summary.total_repositories` / `total_events` / `languages`
+- `summary.domains` — repositories per technical domain (baseline classifier)
+- `summary.events_by_domain` — activity volume per domain
+- `summary.activity` — event counts per activity type (push, pull_request, …)
+- `summary.events_per_month` — 12-month activity trend
+- `repositories` — per-repo stats incl. `event_count` and `pushed_at`
+- `recent_activity` — latest events with repo and timestamp
+
 Interactive docs: `GET /docs` (Swagger UI).
 
 ## Current limitations / future work

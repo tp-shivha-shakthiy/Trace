@@ -43,11 +43,19 @@ class DomainAggregateResponse(BaseModel):
     repository_names: list[str]
 
 
+class EventMonthResponse(BaseModel):
+    month: str
+    events: int
+
+
 class DeveloperSummaryResponse(BaseModel):
     total_repositories: int
     total_events: int
     languages: dict[str, int]
     domains: dict[str, DomainAggregateResponse]
+    events_by_domain: dict[str, int]
+    activity: dict[str, int]
+    events_per_month: list[EventMonthResponse]
     last_activity_at: datetime | None
 
 
@@ -62,6 +70,8 @@ class RepositorySummaryResponse(BaseModel):
     domains: list[str]
     stargazers_count: int
     forks_count: int
+    pushed_at: datetime | None
+    event_count: int
 
 
 class RecentActivityResponse(BaseModel):

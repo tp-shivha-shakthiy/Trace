@@ -108,6 +108,22 @@ async def test_profile_built_from_persisted_data(session_factory):
     assert types == {"commit", "pull_request"}
 
 
+async def test_profile_activity_aggregations(session_factory):
+    await seed_developer(session_factory)
+    async with session_factory() as session:
+        profile = await profiles.get_developer_profile(session, "octocat")
+
+    summary = profile["summary"]
+
+    assert summary["activity"] == {"commit": 2, "pull_request": 1}
+    assert summary["events_by_domain"] == {"backend": 2, "frontend": 1}
+    assert summary["events_per_month"] == [{"month": "2026-08", "events": 3}]
+
+    by_name = {r["name"]: r for r in profile["repositories"]}
+    assert by_name["api"]["event_count"] == 2
+    assert by_name["app"]["event_count"] == 1
+
+
 async def test_profile_not_found(session_factory):
     async with session_factory() as session:
         with pytest.raises(DeveloperNotFoundError):

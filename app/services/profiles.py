@@ -17,6 +17,7 @@ from app.services.domains import DomainAggregate, aggregate_repository_domains
 RECENT_EVENTS_LIMIT = 10
 TOP_REPOSITORIES_LIMIT = 20
 TOP_LANGUAGES_LIMIT = 10
+ACTIVITY_MONTHS_LIMIT = 12
 
 
 def _repo_language_list(repo: Repository) -> list[str]:
@@ -62,10 +63,11 @@ async def get_developer_profile(session: AsyncSession, username: str) -> dict:
                     Repository.stargazers_count.desc(),
                     Repository.name.asc(),
                 )
-                .limit(TOP_REPOSITORIES_LIMIT)
             )
         ).all()
     )
+
+    repo_by_id = {repo.id: repo for repo in repos}
 
     recent_events = list(
         (
@@ -78,25 +80,57 @@ async def get_developer_profile(session: AsyncSession, username: str) -> dict:
         ).all()
     )
 
-    event_repo_ids = {
-        event.repository_id for event in recent_events if event.repository_id
-    }
-    repo_names = {}
-    if event_repo_ids:
-        for row in await session.execute(
-            select(Repository.id, Repository.full_name).where(
-                Repository.id.in_(event_repo_ids)
+    # Per-repo / per-type event counts from a single grouped query.
+    event_rows = list(
+        (
+            await session.execute(
+                select(
+                    GithubEvent.repository_id,
+                    GithubEvent.event_type,
+                    func.count().label("count"),
+                )
+                .where(GithubEvent.developer_id == developer.id)
+                .group_by(GithubEvent.repository_id, GithubEvent.event_type)
             )
-        ):
-            repo_names[row.id] = row.full_name
+        ).all()
+    )
 
-    total_events = (
-        await session.scalar(
-            select(func.count())
-            .select_from(GithubEvent)
-            .where(GithubEvent.developer_id == developer.id)
+    total_events = sum(row.count for row in event_rows)
+    events_by_type: dict[str, int] = {}
+    events_by_repo: dict[int, int] = {}
+    events_by_domain: dict[str, int] = {}
+    for row in event_rows:
+        events_by_type[row.event_type] = (
+            events_by_type.get(row.event_type, 0) + row.count
         )
-    ) or 0
+        events_by_repo[row.repository_id] = (
+            events_by_repo.get(row.repository_id, 0) + row.count
+        )
+        repo = repo_by_id.get(row.repository_id)
+        if repo and repo.domains:
+            for domain in repo.domains:
+                events_by_domain[domain] = (
+                    events_by_domain.get(domain, 0) + row.count
+                )
+
+    # Monthly event totals (last 12 months, ascending).
+    month_expr = func.to_char(
+        func.date_trunc("month", GithubEvent.occurred_at), "YYYY-MM"
+    )
+    month_rows = list(
+        (
+            await session.execute(
+                select(
+                    month_expr.label("month"),
+                    func.count().label("count"),
+                )
+                .where(GithubEvent.developer_id == developer.id)
+                .group_by(month_expr)
+                .order_by(month_expr.desc())
+                .limit(ACTIVITY_MONTHS_LIMIT)
+            )
+        ).all()
+    )
 
     last_activity_at = recent_events[0].occurred_at if recent_events else None
 
@@ -112,10 +146,16 @@ async def get_developer_profile(session: AsyncSession, username: str) -> dict:
         "followers": developer.followers,
         "following": developer.following,
         "summary": {
-            "total_repositories": len(repos),
+            "total_repositories": len(repo_by_id),
             "total_events": total_events,
             "languages": _aggregate_languages(repos),
             "domains": _aggregate_domains(repos),
+            "events_by_domain": events_by_domain,
+            "activity": events_by_type,
+            "events_per_month": [
+                {"month": row.month, "events": row.count}
+                for row in reversed(month_rows)
+            ],
             "last_activity_at": last_activity_at,
         },
         "repositories": [
@@ -130,14 +170,20 @@ async def get_developer_profile(session: AsyncSession, username: str) -> dict:
                 "domains": repo.domains or [],
                 "stargazers_count": repo.stargazers_count,
                 "forks_count": repo.forks_count,
+                "pushed_at": repo.pushed_at,
+                "event_count": events_by_repo.get(repo.id, 0),
             }
-            for repo in repos
+            for repo in repos[:TOP_REPOSITORIES_LIMIT]
         ],
         "recent_activity": [
             {
                 "event_type": event.event_type,
                 "resource_id": event.resource_id,
-                "repository": repo_names.get(event.repository_id),
+                "repository": (
+                    repo_by_id[event.repository_id].full_name
+                    if event.repository_id in repo_by_id
+                    else None
+                ),
                 "occurred_at": event.occurred_at,
             }
             for event in recent_events
