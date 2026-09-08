@@ -49,7 +49,13 @@ jobs:
       - name: Lint (ruff)
         run: ruff check app tests trace_schema.py serve.py
 
+      - name: Verify frontend/dist exists
+        run: |
+          ls -la frontend/dist
+          pwd
+          echo "DIST_DIR check: $(test -d frontend/dist && echo EXISTS || echo MISSING)"
+
       - name: Run tests
         env:
           TRACE_TEST_DATABASE_URL: postgresql+psycopg://trace:trace@localhost:5432/trace_test
-        run: pytest -v
+        run: pytest -vv --tb=short
