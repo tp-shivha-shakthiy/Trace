@@ -181,6 +181,33 @@ This starts PostgreSQL and the FastAPI backend. The API is on
 > `DATABASE_URL`. This is intentionally simpler than Alembic migrations for
 > this milestone.
 
+## Deploying on Render
+
+`render.yaml` at the repo root is a Render Blueprint (infrastructure as code)
+that provisions the PostgreSQL database and the backend web service. To deploy
+on Render's free tier:
+
+1. Create/browse to your [Render dashboard](https://dashboard.render.com).
+2. **New + → New Blueprint**, connect your GitHub account if prompted.
+3. Pick the **Trace** repository. Render creates the `trace-db` PostgreSQL
+   database and the `trace` web service, injecting the database connection
+   string into `DATABASE_URL` automatically.
+4. Click **Apply**. After the first build completes (a few minutes), the app
+   is live at `https://trace.onrender.com`; `GET /health` confirms the database
+   connection.
+5. Optional: add a GitHub Personal Access Token as the `GITHUB_TOKEN`
+   environment variable in the Render dashboard to raise the GitHub API rate
+   limit above the anonymous 60 requests/hour.
+
+Notes:
+
+- The launcher honors `$PORT`/`$HOST` (Render's defaults), and plain
+  `postgres://` database URLs (as provided by Render) are normalized to the
+  `postgresql+psycopg://` driver automatically.
+- Free Render services hibernate after ~15 minutes of inactivity; the first
+  request after a wake-up is slower.
+- `autoDeploy: true` redeploys on every push to `main`.
+
 ## Running the tests
 
 Tests run against a **real PostgreSQL** database (they exercise real

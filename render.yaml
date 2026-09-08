@@ -1,0 +1,34 @@
+# Render Blueprint (Infrastructure as Code) for TRACE.
+#
+# Deploy by connecting this GitHub repo's ``main`` branch inside Render:
+#   Dashboard -> New + -> New Blueprint -> pick the repo -> Apply.
+# Render provisions the PostgreSQL database first and injects its connection
+# string into DATABASE_URL for the web service.
+
+services:
+  - type: web
+    name: trace
+    runtime: python
+    plan: free
+    region: oregon
+    autoDeploy: true
+    buildCommand: pip install -r requirements.txt
+    startCommand: python serve.py
+    healthCheckPath: /health
+    envVars:
+      - key: DATABASE_URL
+        fromDatabase:
+          name: trace-db
+          property: connectionString
+      - key: GITHUB_API_URL
+        value: https://api.github.com
+      # Set a Personal Access Token in the Render dashboard for a higher
+      # GitHub API rate limit (unauthenticated: 60 req/hour).
+      - key: GITHUB_TOKEN
+        sync: false
+
+databases:
+  - name: trace-db
+    plan: free
+    databaseName: trace
+    user: trace
