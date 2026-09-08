@@ -21,11 +21,12 @@ import contextlib
 import logging
 from datetime import UTC, datetime
 
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.errors import GitHubError
 from app.github import GitHubClient
-from app.models import SyncJob
+from app.models import Developer, SyncJob
 from app.services.domains import DomainInference
 from app.services.ingestion import IngestionService
 
@@ -118,6 +119,8 @@ class IngestionJobWorker:
             logger.warning("job %s not found", job_id)
             return
         await self._mark_running(job_id)
+
+        token = await self._developer_token(job.developer_username)
         service = IngestionService(
             self._github,
             self._session_factory,
@@ -125,7 +128,7 @@ class IngestionJobWorker:
             language_repos_limit=self._language_repos_limit,
         )
         try:
-            result = await service.run(job.developer_username)
+            result = await service.run(job.developer_username, token=token)
         except GitHubError as exc:
             await self._mark_failed(job_id, str(exc))
             return
@@ -153,6 +156,16 @@ class IngestionJobWorker:
             result.events_persisted,
             result.events_duplicates,
         )
+
+    async def _developer_token(self, username: str) -> str | None:
+        """Return the developer's stored OAuth token, if they connected it."""
+        async with self._session_factory() as session:
+            token = await session.scalar(
+                select(Developer.github_token).where(
+                    Developer.username == username
+                )
+            )
+        return token
 
     async def _mark_running(self, job_id: str) -> None:
         async with self._session_factory() as session:

@@ -46,8 +46,21 @@ class GitHubClient:
         if self._owns_client:
             await self._client.aclose()
 
-    async def _request(self, method: str, path: str, **kwargs: Any) -> Any:
-        """Perform a request, mapping HTTP errors to typed exceptions."""
+    async def _request(
+        self,
+        method: str,
+        path: str,
+        *,
+        token: str | None = None,
+        **kwargs: Any,
+    ) -> Any:
+        """Perform a request, mapping HTTP errors to typed exceptions.
+
+        ``token`` overrides authentication for a single request (used when a
+        developer connects via OAuth); it never mutates client-wide headers.
+        """
+        if token:
+            kwargs.setdefault("headers", {})["Authorization"] = f"Bearer {token}"
         attempts = 0
         while True:
             attempts += 1
@@ -87,11 +100,14 @@ class GitHubClient:
         path: str,
         params: dict[str, Any],
         max_pages: int,
+        token: str | None = None,
     ) -> list[dict[str, Any]]:
         items: list[dict[str, Any]] = []
         for page in range(1, max_pages + 1):
             page_params = {**params, "page": page}
-            result = await self._request("GET", path, params=page_params)
+            result = await self._request(
+                "GET", path, params=page_params, token=token
+            )
             if not isinstance(result, list):
                 raise GitHubApiError(f"{path} did not return a list")
             items.extend(result)
@@ -99,22 +115,34 @@ class GitHubClient:
                 break
         return items
 
-    async def get_user(self, username: str) -> dict[str, Any]:
-        return await self._request("GET", f"/users/{username}")
+    async def get_user(
+        self, username: str, *, token: str | None = None
+    ) -> dict[str, Any]:
+        return await self._request("GET", f"/users/{username}", token=token)
 
-    async def get_user_repos(self, username: str) -> list[dict[str, Any]]:
+    async def get_user_repos(
+        self, username: str, *, token: str | None = None
+    ) -> list[dict[str, Any]]:
         return await self._paginated(
             f"/users/{username}/repos",
             params={"per_page": self._settings.ingestion_repos_per_page},
             max_pages=self._settings.ingestion_repos_max_pages,
+            token=token,
         )
 
-    async def get_repo_languages(self, full_name: str) -> dict[str, Any]:
-        return await self._request("GET", f"/repos/{full_name}/languages")
+    async def get_repo_languages(
+        self, full_name: str, *, token: str | None = None
+    ) -> dict[str, Any]:
+        return await self._request(
+            "GET", f"/repos/{full_name}/languages", token=token
+        )
 
-    async def get_user_events(self, username: str) -> list[dict[str, Any]]:
+    async def get_user_events(
+        self, username: str, *, token: str | None = None
+    ) -> list[dict[str, Any]]:
         return await self._paginated(
             f"/users/{username}/events",
             params={"per_page": self._settings.ingestion_events_per_page},
             max_pages=self._settings.ingestion_events_max_pages,
+            token=token,
         )

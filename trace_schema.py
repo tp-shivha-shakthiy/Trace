@@ -10,15 +10,14 @@ v0.3 uses ``create_all`` rather than Alembic migrations for simplicity.
 
 from app.config import get_settings
 from app.database import build_engine
-from app.models import Base
+from app.schema import ensure_database_schema
 from sqlalchemy import text
 
 
 async def _main() -> None:
     settings = get_settings()
     engine = build_engine(settings.database_url)
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
+    await ensure_database_schema(engine)
     # Verify connectivity + list tables for confirmation.
     async with engine.connect() as conn:
         result = await conn.execute(

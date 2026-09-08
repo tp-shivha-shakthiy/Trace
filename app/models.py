@@ -58,6 +58,9 @@ class Developer(Base, TimestampMixin):
     followers: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     following: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     public_repos: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    # OAuth access token for this developer (used for their syncs only).
+    # Never exposed by the API.
+    github_token: Mapped[str | None] = mapped_column(String(512), nullable=True)
 
 
 class Repository(Base, TimestampMixin):

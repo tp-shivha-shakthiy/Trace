@@ -27,13 +27,15 @@ class GitHubActivityService:
         self._github = github
         self._language_repos_limit = language_repos_limit
 
-    async def fetch_developer(self, username: str) -> DeveloperBundle:
+    async def fetch_developer(
+        self, username: str, *, token: str | None = None
+    ) -> DeveloperBundle:
         """Fetch user, repositories (with language breakdown) and events."""
-        user_raw = await self._github.get_user(username)
-        repos_raw = await self._github.get_user_repos(username)
-        events_raw = await self._github.get_user_events(username)
+        user_raw = await self._github.get_user(username, token=token)
+        repos_raw = await self._github.get_user_repos(username, token=token)
+        events_raw = await self._github.get_user_events(username, token=token)
 
-        languages_by_repo = await self._fetch_languages(repos_raw)
+        languages_by_repo = await self._fetch_languages(repos_raw, token=token)
         user: NormalizedUser = normalize_user(user_raw)
         repositories = [
             self._attach_languages(normalize_repo(raw), languages_by_repo)
@@ -46,7 +48,7 @@ class GitHubActivityService:
         return DeveloperBundle(user=user, repositories=repositories, events=events)
 
     async def _fetch_languages(
-        self, repos_raw: list[dict]
+        self, repos_raw: list[dict], *, token: str | None = None
     ) -> dict[str, dict[str, int]]:
         """Fetch per-repo language breakdowns for the top-referenced repos.
 
@@ -63,7 +65,10 @@ class GitHubActivityService:
 
         full_names = [r.get("full_name") for r in candidate if r.get("full_name")]
         results = await asyncio.gather(
-            *(self._github.get_repo_languages(name) for name in full_names),
+            *(
+                self._github.get_repo_languages(name, token=token)
+                for name in full_names
+            ),
             return_exceptions=True,
         )
         return {

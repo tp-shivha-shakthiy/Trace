@@ -32,6 +32,14 @@ class GitHubApiError(GitHubError):
     """Raised for unexpected GitHub API failures (5xx, network, etc.)."""
 
 
+class OAuthNotConfiguredError(TraceError):
+    """Raised when GitHub OAuth is used but the server has no credentials."""
+
+
+class OAuthExchangeFailedError(TraceError):
+    """Raised when the GitHub OAuth token exchange or user fetch fails."""
+
+
 def register_exception_handlers(app: FastAPI) -> None:
     """Attach JSON error handlers for TRACE exceptions."""
 
@@ -62,4 +70,18 @@ def register_exception_handlers(app: FastAPI) -> None:
         return JSONResponse(
             status_code=502,
             content={"detail": f"GitHub API error: {exc}"},
+        )
+
+    @app.exception_handler(OAuthNotConfiguredError)
+    async def _oauth_not_configured(request: Request, exc: OAuthNotConfiguredError):
+        return JSONResponse(
+            status_code=503,
+            content={"detail": str(exc)},
+        )
+
+    @app.exception_handler(OAuthExchangeFailedError)
+    async def _oauth_exchange_failed(request: Request, exc: OAuthExchangeFailedError):
+        return JSONResponse(
+            status_code=502,
+            content={"detail": str(exc)},
         )

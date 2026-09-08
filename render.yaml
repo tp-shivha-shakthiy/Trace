@@ -27,6 +27,14 @@ services:
       # GitHub API rate limit (unauthenticated: 60 req/hour).
       - key: GITHUB_TOKEN
         sync: false
+      # GitHub OAuth app (https://github.com/settings/developers):
+      # redirect URI must be <service URL>/auth/github/callback
+      - key: GITHUB_OAUTH_CLIENT_ID
+        sync: false
+      - key: GITHUB_OAUTH_CLIENT_SECRET
+        sync: false
+      - key: GITHUB_OAUTH_TOKEN_URL
+        value: https://github.com/login/oauth/access_token
 
 databases:
   - name: trace-db

@@ -327,6 +327,8 @@ swappable.
 |--------|-----------------------------|------------------------------------------------|
 | GET    | `/health`                   | Liveness + DB readiness                        |
 | GET    | `/`                         | App info / docs link                           |
+| GET    | `/auth/github`              | OAuth login: redirect to GitHub consent screen |
+| GET    | `/auth/github/callback`     | OAuth callback: connect account + auto-sync   |
 | POST   | `/api/v1/sync`              | Enqueue async GitHub ingestion (202)           |
 | GET    | `/api/v1/sync/{job_id}`     | Query ingestion job status/counts              |
 | GET    | `/api/v1/developers`        | List ingested developers                       |
@@ -342,6 +344,17 @@ persisted data into:
 - `summary.events_per_month` — 12-month activity trend
 - `repositories` — per-repo stats incl. `event_count` and `pushed_at`
 - `recent_activity` — latest events with repo and timestamp
+
+### GitHub OAuth (optional)
+
+Register an OAuth app at https://github.com/settings/developers with a redirect
+URI of `<your app URL>/auth/github/callback`, then set
+`GITHUB_OAUTH_CLIENT_ID` and `GITHUB_OAUTH_CLIENT_SECRET`. Once a developer
+visits `GET /auth/github` and approves access, their token is stored on their
+developer record and every subsequent sync for them runs authenticated
+(5000 req/hr instead of the anonymous 60 req/hr). Tokens are never returned by
+the API; the "success/callback" exchange is exercised in the test suite with a
+mocked GitHub HTTP client.
 
 Interactive docs: `GET /docs` (Swagger UI).
 

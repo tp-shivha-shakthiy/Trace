@@ -13,16 +13,17 @@ from __future__ import annotations
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
+import httpx
 from fastapi import FastAPI
 from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker
 
 from app import _loop  # noqa: F401  (configures the asyncio policy on Windows)
-from app.api import routes_developers, routes_health, routes_sync
+from app.api import routes_auth, routes_developers, routes_health, routes_sync
 from app.config import Settings, get_settings
 from app.database import build_engine, build_session_factory
 from app.errors import register_exception_handlers
 from app.github import GitHubClient
-from app.models import Base
+from app.schema import ensure_database_schema
 from app.services.domains import DomainInference
 from app.services.jobs import IngestionJobWorker
 
@@ -60,13 +61,13 @@ def create_app(
     @asynccontextmanager
     async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
         if owns_engine and engine is not None:
-            async with engine.begin() as conn:
-                await conn.run_sync(Base.metadata.create_all)
+            await ensure_database_schema(engine)
         await worker.start()
         try:
             yield
         finally:
             await worker.stop()
+            await _app.state.oauth_client.aclose()
             if owns_engine:
                 await engine.dispose()
 
@@ -75,12 +76,17 @@ def create_app(
         version=settings.app_version,
         lifespan=lifespan,
     )
+    app.state.settings = settings
     app.state.session_factory = session_factory
     app.state.ingestion_worker = worker
+    app.state.oauth_client = httpx.AsyncClient(
+        timeout=settings.github_timeout_seconds
+    )
 
     register_exception_handlers(app)
 
     app.include_router(routes_health.router)
+    app.include_router(routes_auth.router)
     app.include_router(routes_developers.router)
     app.include_router(routes_developers.router, prefix=settings.api_v1_prefix)
     app.include_router(routes_sync.router, prefix=settings.api_v1_prefix)

@@ -137,8 +137,10 @@ class IngestionService:
         self._session_factory = session_factory
         self._domains = domain_inference or KeywordDomainInference()
 
-    async def run(self, username: str) -> IngestionResult:
-        bundle = await self._activity.fetch_developer(username)
+    async def run(
+        self, username: str, *, token: str | None = None
+    ) -> IngestionResult:
+        bundle = await self._activity.fetch_developer(username, token=token)
         async with self._session_factory() as session:
             async with session.begin():
                 developer_id = await self._upsert_developer(session, bundle)

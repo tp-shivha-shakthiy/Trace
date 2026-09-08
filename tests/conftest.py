@@ -17,7 +17,8 @@ from app import _loop
 from app.config import Settings
 from app.database import build_session_factory
 from app.github import GitHubClient
-from app.models import Base, Developer, GithubEvent, Repository, SyncJob
+from app.models import Developer, GithubEvent, Repository, SyncJob
+from app.schema import ensure_database_schema
 from sqlalchemy import delete
 from sqlalchemy.ext.asyncio import create_async_engine
 from sqlalchemy.pool import NullPool
@@ -152,8 +153,7 @@ def test_settings() -> Settings:
 async def test_engine():
     # NullPool so connections are never shared across pytest event loops.
     engine = create_async_engine(TEST_DATABASE_URL, poolclass=NullPool)
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
+    await ensure_database_schema(engine)
     yield engine
     await engine.dispose()
 
