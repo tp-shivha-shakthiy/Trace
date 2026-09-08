@@ -15,7 +15,7 @@ services:
     plan: free
     region: oregon
     autoDeployTrigger: commit
-    buildCommand: pip install -r requirements.txt
+    buildCommand: pip install -r requirements.txt && npm --prefix frontend ci && npm --prefix frontend run build
     startCommand: python serve.py
     healthCheckPath: /health
     envVars:

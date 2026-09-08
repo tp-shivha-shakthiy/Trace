@@ -10,11 +10,14 @@ The lifespan starts/stops the background ingestion worker so that
 
 from __future__ import annotations
 
+import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 import httpx
 from fastapi import FastAPI
+from fastapi.staticfiles import StaticFiles
 from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker
 
 from app import _loop  # noqa: F401  (configures the asyncio policy on Windows)
@@ -91,13 +94,31 @@ def create_app(
     app.include_router(routes_developers.router, prefix=settings.api_v1_prefix)
     app.include_router(routes_sync.router, prefix=settings.api_v1_prefix)
 
-    @app.get("/")
-    async def root() -> dict:
-        return {
-            "app": settings.app_name,
-            "version": settings.app_version,
-            "docs": "/docs",
-        }
+    # When the SPA has been built (frontend/dist exists) it is served at "/".
+    # Router registration above happens first, so /api, /auth, /health,
+    # /docs and /openapi.json keep precedence; the SPA mount only owns the
+    # root and its static assets. The SPA uses hash-based routing, so no
+    # server-side fallback is required for client-side routes.
+    dist_dir = Path(__file__).resolve().parent.parent / "frontend" / "dist"
+    if settings.serve_spa and dist_dir.is_dir():
+        app.mount(
+            "/",
+            StaticFiles(directory=dist_dir, html=True),
+            name="spa",
+        )
+    else:
+        logging.getLogger(__name__).warning(
+            "frontend/dist not found (serve_spa=%s) - serving API JSON at /",
+            settings.serve_spa,
+        )
+
+        @app.get("/")
+        async def root() -> dict:
+            return {
+                "app": settings.app_name,
+                "version": settings.app_version,
+                "docs": "/docs",
+            }
 
     return app
 

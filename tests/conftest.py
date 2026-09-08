@@ -202,6 +202,13 @@ def app(session_factory, mock_github_client):
     app = create_app(
         session_factory=session_factory,
         github_client=mock_github_client,
+        # Keep the root endpoint deterministic in tests: never mount the SPA
+        # (frontend/dist may or may not exist on any given machine).
+        settings=Settings(
+            database_url=TEST_DATABASE_URL,
+            github_token=None,
+            serve_spa=False,
+        ),
     )
     yield app
 

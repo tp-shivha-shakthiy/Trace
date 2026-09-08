@@ -62,6 +62,11 @@ class Settings(BaseSettings):
     # Number of background ingestion workers pulling from the in-process queue.
     sync_worker_concurrency: int = 2
 
+    # When true (default) and a built ``frontend/dist`` exists at serve time,
+    # the FastAPI app mounts the TRACE SPA static assets at ``/``. Disable with
+    # ``SERVE_SPA=false`` in CI/tests where no built assets exist.
+    serve_spa: bool = True
+
 
 @lru_cache
 def get_settings() -> Settings:

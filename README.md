@@ -97,7 +97,73 @@ conceptual overhead.
 | HTTP client      | httpx (with MockTransport for tests)           |
 | Tests            | pytest, pytest-asyncio                         |
 | Linting          | ruff                                           |
+| Frontend         | React 19, Vite 8, TypeScript 7                 |
 | Infrastructure   | Docker Compose (optional local dev)            |
+
+## Frontend (TRACE SPA)
+
+The repository includes a single-page application built with **React 19 + Vite
+8 + TypeScript** in `frontend/`. It is served by the FastAPI backend at `/`
+when `frontend/dist` exists (the default on Render and in the Docker image).
+The SPA uses **hash-based routing** (React Router `HashRouter`), so no server-
+side fallback is required.
+
+### Running the frontend locally
+
+```bash
+cd frontend
+npm ci
+npm run dev          # Vite dev server on http://localhost:5173
+```
+
+The Vite dev server proxies `/api`, `/auth`, and `/health` to the local
+FastAPI backend (default `http://localhost:8000`). To test the full integration,
+start the backend in another terminal:
+
+```bash
+# Terminal 1
+python serve.py
+# Terminal 2
+cd frontend && npm run dev
+```
+
+Then open `http://localhost:5173`. The dev server hot-reloads TypeScript/JSX
+changes. The production build is created with `npm run build` and placed in
+`frontend/dist/`.
+
+### Production serving
+
+When the FastAPI app starts, it checks for `frontend/dist/`. If the directory
+exists and `SERVE_SPA` is not explicitly `false`, the built assets are mounted
+at `/` via `StaticFiles(html=True)`. This means:
+
+- `GET /` → `index.html` (the SPA)
+- `GET /assets/...` → hashed JS/CSS bundles
+- `GET /api/...` → FastAPI routers (registered before the SPA mount, so they
+  take precedence)
+- `GET /health`, `GET /docs`, `GET /openapi.json` → FastAPI built-ins (also
+  registered before the mount)
+- All other paths → the SPA's hash router handles them client-side
+
+This works for both the Docker image and Render (the `buildCommand` in
+`render.yaml` runs `npm ci && npm run build` in the `frontend/` directory
+before installing Python deps).
+
+### Frontend structure
+
+```
+frontend/
+  src/
+    api.ts           # fetch helpers + TypeScript API types
+    types.ts         # mirrors app/schemas.py response shapes
+    components.tsx   # DomainSignalCard, ScoreBar, badges, charts
+    pages/
+      Home.tsx       # search + list of synced developers
+      Developer.tsx  # profile with signals, stats, repos, activity
+    styles.css       # dark theme, no CSS framework
+  vite.config.ts     # dev proxy to http://localhost:8000
+  tsconfig.json
+```
 
 ## Project structure
 
@@ -415,7 +481,7 @@ Interactive docs: `GET /docs` (Swagger UI).
   commit diffs, or third-party starred/contributed repositories, so sparse
   repos are under-signaled rather than overstated. Scores are evidence
   signals, **not verified expertise**.
-- No metrics/tracing, no recommendation engine, no frontend.
+- No metrics/tracing, no recommendation engine.
 
 **Future work:**
 - **Temporal skill evolution** — how a developer's domains and evidence
@@ -423,5 +489,4 @@ Interactive docs: `GET /docs` (Swagger UI).
   work; today's inference is a static snapshot of the persisted evidence.
 - Learned/ML domain classifier behind the `DomainInference` protocol (ML-based
   inference is **not** implemented yet).
-- Durable job broker, Alembic migrations, structured logging/metrics, and a
-  React dashboard.
+- Durable job broker, Alembic migrations, structured logging/metrics.
