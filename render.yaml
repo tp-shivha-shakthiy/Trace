@@ -4,6 +4,9 @@
 #   Dashboard -> New + -> New Blueprint -> pick the repo -> Apply.
 # Render provisions the PostgreSQL database first and injects its connection
 # string into DATABASE_URL for the web service.
+#
+# Python version is pinned via the ``.python-version`` file (Render reads it
+# for both build and run; see https://render.com/docs/python-version).
 
 services:
   - type: web
@@ -11,8 +14,7 @@ services:
     runtime: python
     plan: free
     region: oregon
-    pythonVersion: 3.13.0
-    autoDeploy: true
+    autoDeployTrigger: commit
     buildCommand: pip install -r requirements.txt
     startCommand: python serve.py
     healthCheckPath: /health
