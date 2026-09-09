@@ -288,13 +288,17 @@ reach GitHub**.
 CREATE DATABASE trace_test OWNER trace;
 
 pip install -r requirements-dev.txt
-pytest -v
+python -m pytest -v
 ```
+
+> Use `python -m pytest` rather than the bare `pytest` command: the `app`
+> package is a top-level source directory (not pip-installed), and `python -m`
+> puts the repository root on `sys.path` so the test suite can import it.
 
 Override the test DB with `TRACE_TEST_DATABASE_URL` if needed:
 
 ```bash
-TRACE_TEST_DATABASE_URL=postgresql+psycopg://user:pass@localhost:5432/other_db pytest -v
+TRACE_TEST_DATABASE_URL=postgresql+psycopg://user:pass@localhost:5432/other_db python -m pytest -v
 ```
 
 Lint with:
