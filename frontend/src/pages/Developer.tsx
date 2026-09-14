@@ -3,6 +3,7 @@ import { Link, useParams } from "react-router-dom";
 import {
   ApiError,
   formatDate,
+  getMyProfile,
   getProfile,
   syncAndWait,
 } from "../api";
@@ -18,37 +19,44 @@ type SyncState =
   | { phase: "syncing"; status: string }
   | { phase: "failed"; message: string };
 
-export default function Developer() {
+export default function Developer({ self = false }: { self?: boolean }) {
   const { username = "" } = useParams();
   const [profile, setProfile] = useState<DeveloperProfile | null>(null);
   const [notFound, setNotFound] = useState(false);
+  const [connectRequired, setConnectRequired] = useState(false);
   const [loading, setLoading] = useState(true);
   const [sync, setSync] = useState<SyncState>({ phase: "idle" });
 
   const refresh = useCallback(async () => {
     setLoading(true);
     setNotFound(false);
+    setConnectRequired(false);
     setSync({ phase: "idle" });
     try {
-      setProfile(await getProfile(username));
+      setProfile(self ? await getMyProfile() : await getProfile(username));
     } catch (err) {
       if (err instanceof ApiError && err.status === 404) {
         setNotFound(true);
+        setProfile(null);
+      } else if (err instanceof ApiError && err.status === 401 && self) {
+        setConnectRequired(true);
         setProfile(null);
       }
     } finally {
       setLoading(false);
     }
-  }, [username]);
+  }, [self, username]);
 
   useEffect(() => {
     void refresh();
   }, [refresh]);
 
+  const syncUsername = profile?.username ?? username;
+
   async function runSync() {
     setSync({ phase: "syncing", status: "queued" });
     try {
-      const job = await syncAndWait(username, (status) =>
+      const job = await syncAndWait(syncUsername, (status) =>
         setSync({ phase: "syncing", status }),
       );
       if (job.status === "failed") {
@@ -74,12 +82,30 @@ export default function Developer() {
     <div className="developer">
       {notFound && (
         <section className="card">
-          <h1>@{username} is not synced yet</h1>
+          <h1>@{username || "developer"} is not synced yet</h1>
           <p>
             TRACE hasn't ingested this developer. Sync their public GitHub
             activity to build their domain profile.
           </p>
           <SyncButton state={sync} onSync={runSync} />
+          <p className="muted">
+            <Link to="/">← back to all developers</Link>
+          </p>
+        </section>
+      )}
+
+      {connectRequired && (
+        <section className="card">
+          <h1>Not connected</h1>
+          <p>
+            Sign in with GitHub to view your TRACE profile, including private
+            repositories.
+          </p>
+          <p>
+            <a className="button" href="/auth/github">
+              Connect GitHub
+            </a>
+          </p>
           <p className="muted">
             <Link to="/">← back to all developers</Link>
           </p>
@@ -102,6 +128,9 @@ export default function Developer() {
               >
                 @{profile.username}
               </a>
+              {profile.is_owner && (
+                <span className="pill owner-pill">your profile</span>
+              )}
               {profile.bio && <p className="bio">{profile.bio}</p>}
               <p className="meta">
                 {[profile.company, profile.location]
@@ -243,6 +272,7 @@ function RepoRow({ repo }: { repo: RepositorySummary }) {
         <a href={repo.html_url ?? undefined} target="_blank" rel="noreferrer">
           {repo.full_name}
         </a>
+        {repo.is_private && <span className="pill private-pill">private</span>}
         {repo.description && (
           <span className="repo-desc">{repo.description}</span>
         )}

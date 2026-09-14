@@ -41,6 +41,7 @@ export interface RepositorySummary {
   languages: string[];
   topics: string[];
   domains: string[];
+  is_private: boolean;
   stargazers_count: number;
   forks_count: number;
   pushed_at: string | null;
@@ -65,9 +66,17 @@ export interface DeveloperProfile {
   public_repos: number;
   followers: number;
   following: number;
+  is_owner: boolean;
   summary: DeveloperSummary;
   repositories: RepositorySummary[];
   recent_activity: RecentActivity[];
+}
+
+export interface MeIdentity {
+  username: string;
+  name: string | null;
+  avatar_url: string | null;
+  html_url: string | null;
 }
 
 export interface DeveloperListItem {

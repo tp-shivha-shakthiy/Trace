@@ -1,6 +1,7 @@
 import type {
   DeveloperListItem,
   DeveloperProfile,
+  MeIdentity,
   SyncCreated,
   SyncJob,
 } from "./types";
@@ -41,6 +42,14 @@ export async function listDevelopers(): Promise<DeveloperListItem[]> {
 
 export async function getProfile(username: string): Promise<DeveloperProfile> {
   return request<DeveloperProfile>(`/api/v1/developers/${username}`);
+}
+
+export async function getMe(): Promise<MeIdentity> {
+  return request<MeIdentity>("/api/v1/me");
+}
+
+export async function getMyProfile(): Promise<DeveloperProfile> {
+  return request<DeveloperProfile>("/api/v1/me/profile");
 }
 
 export async function enqueueSync(username: string): Promise<SyncCreated> {
