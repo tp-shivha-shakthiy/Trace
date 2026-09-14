@@ -21,7 +21,9 @@ function TopBar() {
             My Profile
           </Link>
         ) : (
-          <Link to="/auth/github">Connect GitHub</Link>
+          // /auth/github is a backend route; a full-page anchor (not a
+          // HashRouter <Link>, which would stay client-side) starts OAuth.
+          <a href="/auth/github">Connect GitHub</a>
         )}
       </nav>
     </header>

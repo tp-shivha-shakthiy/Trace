@@ -6,6 +6,7 @@ import pytest
 from app.config import Settings
 from app.errors import OAuthExchangeFailedError, OAuthNotConfiguredError
 from app.github import GitHubClient
+from app.main import create_app
 from app.models import Developer
 from app.services import oauth
 from app.services.ingestion import IngestionService
@@ -209,3 +210,73 @@ async def test_sync_uses_stored_token_in_requests(session_factory):
     result = await service.run("octocat", token="tok-abc")
     assert result.repositories_synced == 3
     assert seen and all(header == "Bearer tok-abc" for header in seen)
+
+
+async def _oauth_callback_app(session_factory):
+    """Build the app exactly as the real one, but with GitHub mocked."""
+    app = create_app(
+        settings=TOKEN_SETTINGS,
+        session_factory=session_factory,
+        github_client=GitHubClient(
+            Settings(),
+            client=httpx.AsyncClient(
+                transport=httpx.MockTransport(make_github_handler()),
+                base_url="https://api.github.com",
+            ),
+        ),
+    )
+    app.state.oauth_client = httpx.AsyncClient(
+        transport=httpx.MockTransport(_oauth_handler())
+    )
+    return app
+
+
+async def test_oauth_callback_sets_usable_session_cookie(session_factory):
+    """The whole browser chain: callback -> cookie -> authenticated /me."""
+    app = await _oauth_callback_app(session_factory)
+    async with async_test_client(app) as client:
+        client.cookies.set("trace_oauth_state", "s1")
+        callback = await client.get(
+            "/auth/github/callback",
+            params={"code": "abc", "state": "s1"},
+        )
+        assert callback.status_code == 200, callback.text
+        # Session cookie must have reached the browser's cookie jar.
+        assert "trace_session" in client.cookies
+
+        me = await client.get("/api/v1/me")
+        assert me.status_code == 200
+        assert me.json()["username"] == "oauthuser"
+
+        # The public profile now exists and the owner profile resolves.
+        public = await client.get("/api/v1/developers/oauthuser")
+        assert public.status_code == 200
+        mine = await client.get("/api/v1/me/profile")
+        assert mine.status_code == 200
+        assert mine.json()["username"] == "oauthuser"
+
+
+async def test_oauth_callback_redirects_browser_into_spa(session_factory):
+    """Browsers (Accept: text/html) are sent to /#/me after login; the JSON
+    contract is preserved for API clients (default Accept: */*)."""
+    app = await _oauth_callback_app(session_factory)
+    async with async_test_client(app) as client:
+        client.cookies.set("trace_oauth_state", "s1")
+        response = await client.get(
+            "/auth/github/callback",
+            params={"code": "abc", "state": "s1"},
+            headers={"accept": "text/html"},
+        )
+        assert response.status_code == 303
+        assert response.headers["location"] == "/#/me"
+        assert "trace_session=" in response.headers.get("set-cookie", "")
+
+        # API clients still receive the connected JSON, not a redirect.
+        async with async_test_client(app) as api_client:
+            api_client.cookies.set("trace_oauth_state", "s1")
+            api_response = await api_client.get(
+                "/auth/github/callback",
+                params={"code": "abc", "state": "s1"},
+            )
+            assert api_response.status_code == 200
+            assert api_response.json()["status"] == "connected"

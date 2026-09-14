@@ -78,6 +78,11 @@ async def github_callback(
             "sync_job_id": job_id,
         }
     )
+    # A browser ends up on this URL after GitHub redirects it back; send it
+    # into the SPA (hash route #/me) so the fresh session is actually used.
+    # Plain API/curl clients keep the JSON "connected" contract.
+    if "text/html" in request.headers.get("accept", ""):
+        response = RedirectResponse(url="/#/me", status_code=303)
     response.delete_cookie(_STATE_COOKIE)
     response.set_cookie(
         sessions.SESSION_COOKIE,
