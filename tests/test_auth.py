@@ -195,6 +195,54 @@ async def test_me_requires_session(app, session_factory):
         assert "token" not in body
 
 
+async def test_logout_invalidates_only_current_session_and_clears_cookie(
+    app, session_factory,
+):
+    _, alice_token = await _seed_owner(session_factory, "alice")
+    _, bob_token = await _seed_owner(session_factory, "bob")
+
+    async with async_test_client(app) as client:
+        before = await client.get(
+            "/api/v1/me", cookies={sessions.SESSION_COOKIE: alice_token}
+        )
+        assert before.status_code == 200
+        assert before.json()["username"] == "alice"
+
+        logged_out = await client.post(
+            "/auth/logout", cookies={sessions.SESSION_COOKIE: alice_token}
+        )
+        assert logged_out.status_code == 200
+        assert logged_out.json() == {"status": "logged_out"}
+        set_cookie = logged_out.headers["set-cookie"]
+        assert "trace_session=" in set_cookie
+        assert "Max-Age=0" in set_cookie
+
+        old_session = await client.get(
+            "/api/v1/me", cookies={sessions.SESSION_COOKIE: alice_token}
+        )
+        assert old_session.status_code == 401
+        assert (
+            await client.get(
+                "/api/v1/me/profile",
+                cookies={sessions.SESSION_COOKIE: alice_token},
+            )
+        ).status_code == 401
+
+        other_session = await client.get(
+            "/api/v1/me", cookies={sessions.SESSION_COOKIE: bob_token}
+        )
+        assert other_session.status_code == 200
+        assert other_session.json()["username"] == "bob"
+
+
+async def test_logout_without_session_is_successful(app):
+    async with async_test_client(app) as client:
+        response = await client.post("/auth/logout")
+
+    assert response.status_code == 200
+    assert response.json() == {"status": "logged_out"}
+
+
 async def test_me_profile_endpoint_public_profile_split(app, session_factory):
     _, token = await _seed_owner(session_factory, "alice")
     await _seed_owner(session_factory, "bob")

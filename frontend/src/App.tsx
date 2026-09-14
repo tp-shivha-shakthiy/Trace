@@ -1,11 +1,24 @@
 import { useEffect, useState } from "react";
-import { HashRouter, Link, Route, Routes } from "react-router-dom";
-import { getMe } from "./api";
+import { HashRouter, Link, Route, Routes, useNavigate } from "react-router-dom";
+import { getMe, logout } from "./api";
 import Home from "./pages/Home";
 import Developer from "./pages/Developer";
 import type { MeIdentity } from "./types";
 
-function TopBar({ me }: { me: MeIdentity | null }) {
+function TopBar({
+  me,
+  onLogout,
+}: {
+  me: MeIdentity | null;
+  onLogout: () => Promise<void>;
+}) {
+  const navigate = useNavigate();
+
+  async function handleLogout() {
+    await onLogout();
+    navigate("/");
+  }
+
   return (
     <header className="topbar">
       <Link to="/" className="brand">
@@ -13,9 +26,14 @@ function TopBar({ me }: { me: MeIdentity | null }) {
       </Link>
       <nav className="topbar-links">
         {me ? (
-          <Link to="/me" className="me-link">
-            My Profile
-          </Link>
+          <>
+            <Link to="/me" className="me-link">
+              My Profile
+            </Link>
+            <button type="button" onClick={handleLogout}>
+              Logout
+            </button>
+          </>
         ) : (
           // /auth/github is a backend route; a full-page anchor (not a
           // HashRouter <Link>, which would stay client-side) starts OAuth.
@@ -36,7 +54,13 @@ export default function App() {
   return (
     <HashRouter>
       <div className="app">
-        <TopBar me={me} />
+        <TopBar
+          me={me}
+          onLogout={async () => {
+            await logout();
+            setMe(null);
+          }}
+        />
         <main className="content">
           <Routes>
             <Route path="/" element={<Home meUsername={me?.username} />} />

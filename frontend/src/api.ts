@@ -48,6 +48,10 @@ export async function getMe(): Promise<MeIdentity> {
   return request<MeIdentity>("/api/v1/me");
 }
 
+export async function logout(): Promise<void> {
+  await request<{ status: string }>("/auth/logout", { method: "POST" });
+}
+
 export async function getMyProfile(): Promise<DeveloperProfile> {
   return request<DeveloperProfile>("/api/v1/me/profile");
 }

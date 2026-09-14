@@ -14,14 +14,32 @@ from __future__ import annotations
 import secrets
 
 import httpx
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import JSONResponse, RedirectResponse
+from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.deps import get_db
 from app.services import oauth, sessions
 
 router = APIRouter(tags=["auth"])
 
 _STATE_COOKIE = "trace_oauth_state"
+
+
+@router.post("/auth/logout")
+async def logout(
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+) -> JSONResponse:
+    """Invalidate the current TRACE session and expire its browser cookie."""
+    await sessions.delete_session(
+        db, request.cookies.get(sessions.SESSION_COOKIE)
+    )
+    await db.commit()
+
+    response = JSONResponse({"status": "logged_out"})
+    response.delete_cookie(sessions.SESSION_COOKIE, path="/")
+    return response
 
 
 @router.get("/auth/github")

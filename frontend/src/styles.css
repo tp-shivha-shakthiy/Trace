@@ -65,6 +65,26 @@ body {
   color: var(--accent);
 }
 
+.topbar-links {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+}
+
+.topbar-links button {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  font-size: 0.9rem;
+  cursor: pointer;
+}
+
+.topbar-links button:hover {
+  color: var(--accent);
+}
+
 .content {
   flex: 1;
 }

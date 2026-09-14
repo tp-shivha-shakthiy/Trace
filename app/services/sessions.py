@@ -12,7 +12,7 @@ import hashlib
 import secrets
 from datetime import UTC, datetime, timedelta
 
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import AuthSession, Developer
@@ -59,3 +59,12 @@ async def resolve_developer(
     if auth_session is None:
         return None
     return await session.get(Developer, auth_session.developer_id)
+
+
+async def delete_session(session: AsyncSession, token: str | None) -> None:
+    """Invalidate only the session represented by ``token``."""
+    if not token:
+        return
+    await session.execute(
+        delete(AuthSession).where(AuthSession.token_digest == digest_token(token))
+    )
