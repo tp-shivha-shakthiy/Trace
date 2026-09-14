@@ -52,6 +52,11 @@ class Settings(BaseSettings):
     github_oauth_client_secret: str | None = None
     github_oauth_token_url: str = "https://github.com/login/oauth/access_token"
 
+    # Application session cookie (issued on GitHub OAuth success).
+    session_max_age_days: int = 30
+    # Set to True behind HTTPS so the session cookie is only sent over TLS.
+    session_cookie_secure: bool = False
+
     # Ingestion bounds keep a single sync bounded and demo-friendly.
     ingestion_events_per_page: int = 30
     ingestion_events_max_pages: int = 3

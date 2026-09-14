@@ -17,7 +17,7 @@ import httpx
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse, RedirectResponse
 
-from app.services import oauth
+from app.services import oauth, sessions
 
 router = APIRouter(tags=["auth"])
 
@@ -53,12 +53,18 @@ async def github_callback(
     github_user = await oauth.fetch_authenticated_user(client, settings, token)
 
     factory = request.app.state.session_factory
+    settings = request.app.state.settings
     async with factory() as session:
         async with session.begin():
             developer = await oauth.connect_developer(session, github_user, token)
+            session_token = await sessions.create_session(
+                session, developer, max_age_days=settings.session_max_age_days
+            )
 
+    # Only this (now authenticated) owner may sync themselves with the token,
+    # which is what makes their private repositories ingestible.
     job_id = await request.app.state.ingestion_worker.create_and_enqueue(
-        developer.username
+        developer.username, use_token=True
     )
 
     response = JSONResponse(
@@ -73,4 +79,13 @@ async def github_callback(
         }
     )
     response.delete_cookie(_STATE_COOKIE)
+    response.set_cookie(
+        sessions.SESSION_COOKIE,
+        session_token,
+        max_age=settings.session_max_age_days * 24 * 3600,
+        httponly=True,
+        samesite="lax",
+        secure=settings.session_cookie_secure,
+        path="/",
+    )
     return response

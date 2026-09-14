@@ -40,6 +40,10 @@ class OAuthExchangeFailedError(TraceError):
     """Raised when the GitHub OAuth token exchange or user fetch fails."""
 
 
+class AuthRequiredError(TraceError):
+    """Raised when an endpoint requires an authenticated TRACE user."""
+
+
 def register_exception_handlers(app: FastAPI) -> None:
     """Attach JSON error handlers for TRACE exceptions."""
 
@@ -84,4 +88,12 @@ def register_exception_handlers(app: FastAPI) -> None:
         return JSONResponse(
             status_code=502,
             content={"detail": str(exc)},
+        )
+
+    @app.exception_handler(AuthRequiredError)
+    async def _auth_required(request: Request, exc: AuthRequiredError):
+        return JSONResponse(
+            status_code=401,
+            content={"detail": "Authentication required"},
+            headers={"WWW-Authenticate": "Session"},
         )
