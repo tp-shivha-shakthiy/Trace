@@ -22,11 +22,12 @@ import logging
 from datetime import UTC, datetime
 
 from sqlalchemy import select
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.errors import GitHubError
 from app.github import GitHubClient
-from app.models import Developer, SyncJob
+from app.models import Developer, FetchedDeveloper, SyncJob
 from app.services.domains import DomainInference
 from app.services.ingestion import IngestionService
 
@@ -86,7 +87,11 @@ class IngestionJobWorker:
         await self._github.aclose()
 
     async def create_and_enqueue(
-        self, username: str, *, use_token: bool = False
+        self,
+        username: str,
+        *,
+        use_token: bool = False,
+        owner_id: int | None = None,
     ) -> str:
         """Create a persisted ``queued`` job and hand its id to the queue.
 
@@ -95,7 +100,11 @@ class IngestionJobWorker:
         account owner should create token-backed jobs.
         """
         async with self._session_factory() as session:
-            job = SyncJob(developer_username=username, use_token=use_token)
+            job = SyncJob(
+                developer_username=username,
+                use_token=use_token,
+                owner_id=owner_id,
+            )
             session.add(job)
             await session.commit()
             job_id = job.id
@@ -139,7 +148,11 @@ class IngestionJobWorker:
             language_repos_limit=self._language_repos_limit,
         )
         try:
-            result = await service.run(job.developer_username, token=token)
+            result = await service.run(
+                job.developer_username,
+                token=token,
+                owner_id=job.owner_id,
+            )
         except GitHubError as exc:
             await self._mark_failed(job_id, str(exc))
             return
@@ -159,6 +172,17 @@ class IngestionJobWorker:
             stored.events_fetched = result.events_fetched
             stored.events_persisted = result.events_persisted
             stored.events_duplicates = result.events_duplicates
+            if stored.owner_id is not None:
+                await session.execute(
+                    pg_insert(FetchedDeveloper)
+                    .values(
+                        owner_id=stored.owner_id,
+                        developer_id=result.developer_id,
+                    )
+                    .on_conflict_do_nothing(
+                        constraint="uq_fetched_developers_owner_target"
+                    )
+                )
             await session.commit()
         logger.info(
             "job %s succeeded: %d repos, %d events (+%d dup skipped)",

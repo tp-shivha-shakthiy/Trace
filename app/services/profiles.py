@@ -23,11 +23,11 @@ TRACE enforces the public/private boundary here, at the data-access layer:
 
 from __future__ import annotations
 
-from sqlalchemy import func, or_, select
+from sqlalchemy import delete, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.errors import DeveloperNotFoundError
-from app.models import Developer, GithubEvent, Repository
+from app.models import Developer, FetchedDeveloper, GithubEvent, Repository
 from app.services.domains import (
     DomainAggregate,
     KeywordDomainInference,
@@ -84,19 +84,50 @@ def _public_event_filter():
     )
 
 
-async def get_developer_profile(session: AsyncSession, username: str) -> dict:
-    """Build the public developer profile (visible to any other user).
-
-    Private repositories, private activity, and any intelligence derived
-    exclusively from private data are excluded at the query level.
-    """
+async def get_developer_profile(
+    session: AsyncSession,
+    username: str,
+    viewer: Developer | None = None,
+) -> dict:
+    """Build a demo profile or the caller's private fetched profile."""
     developer = await session.scalar(
         select(Developer).where(Developer.username == username)
     )
     if developer is None:
         raise DeveloperNotFoundError(username)
+
+    if developer.is_demo:
+        return await _assemble_profile(
+            session,
+            developer,
+            include_private=False,
+            is_owner=False,
+            owner_id=developer.id,
+            is_fetched=False,
+        )
+    if viewer is None:
+        raise DeveloperNotFoundError(username)
+
+    has_fetch = developer.id == viewer.id
+    if not has_fetch:
+        has_fetch = await session.scalar(
+            select(FetchedDeveloper.id)
+            .where(
+                FetchedDeveloper.developer_id == developer.id,
+                FetchedDeveloper.owner_id == viewer.id,
+            )
+            .limit(1)
+        )
+    if not has_fetch:
+        raise DeveloperNotFoundError(username)
+
     return await _assemble_profile(
-        session, developer, include_private=False, is_owner=False
+        session,
+        developer,
+        include_private=True,
+        is_owner=developer.id == viewer.id,
+        owner_id=viewer.id,
+        is_fetched=True,
     )
 
 
@@ -109,7 +140,12 @@ async def get_my_profile(
     the identity itself — no client-supplied id or username is trusted.
     """
     return await _assemble_profile(
-        session, developer, include_private=True, is_owner=True
+        session,
+        developer,
+        include_private=True,
+        is_owner=True,
+        owner_id=developer.id,
+        is_fetched=False,
     )
 
 
@@ -119,9 +155,14 @@ async def _assemble_profile(
     *,
     include_private: bool,
     is_owner: bool,
+    owner_id: int | None,
+    is_fetched: bool,
 ) -> dict:
     """Assemble a profile from either the full or public data subset."""
-    repo_query = select(Repository).where(Repository.developer_id == developer.id)
+    repo_query = select(Repository).where(
+        Repository.developer_id == developer.id,
+        Repository.owner_id == owner_id,
+    )
     if not include_private:
         repo_query = repo_query.where(Repository.is_private.is_(False))
     repo_query = repo_query.order_by(
@@ -133,20 +174,27 @@ async def _assemble_profile(
     repo_by_id = {repo.id: repo for repo in repos}
 
     recent_query = select(GithubEvent).where(
-        GithubEvent.developer_id == developer.id
+        GithubEvent.developer_id == developer.id,
+        GithubEvent.owner_id == owner_id,
     )
     count_query = select(
         GithubEvent.repository_id,
         GithubEvent.event_type,
         func.count().label("count"),
-    ).where(GithubEvent.developer_id == developer.id)
+    ).where(
+        GithubEvent.developer_id == developer.id,
+        GithubEvent.owner_id == owner_id,
+    )
     month_expr = func.to_char(
         func.date_trunc("month", GithubEvent.occurred_at), "YYYY-MM"
     )
     month_query = select(
         month_expr.label("month"),
         func.count().label("count"),
-    ).where(GithubEvent.developer_id == developer.id)
+    ).where(
+        GithubEvent.developer_id == developer.id,
+        GithubEvent.owner_id == owner_id,
+    )
 
     if not include_private:
         recent_query = recent_query.outerjoin(
@@ -238,6 +286,7 @@ async def _assemble_profile(
         "followers": developer.followers,
         "following": developer.following,
         "is_owner": is_owner,
+        "is_fetched": is_fetched,
         "summary": {
             "total_repositories": len(repo_by_id),
             "total_events": total_events,
@@ -295,14 +344,57 @@ async def _assemble_profile(
     }
 
 
-async def list_developers(session: AsyncSession) -> list[dict]:
-    """Return brief public profiles for every ingested developer.
+async def delete_fetched_profile(
+    session: AsyncSession,
+    username: str,
+    owner: Developer,
+) -> None:
+    """Delete only the caller's fetched snapshot for ``username``."""
+    developer = await session.scalar(
+        select(Developer).where(Developer.username == username)
+    )
+    if developer is None:
+        raise DeveloperNotFoundError(username)
+    repo_ids = select(Repository.id).where(
+        Repository.developer_id == developer.id,
+        Repository.owner_id == owner.id,
+    )
+    await session.execute(
+        delete(GithubEvent).where(
+            GithubEvent.developer_id == developer.id,
+            GithubEvent.owner_id == owner.id,
+        )
+    )
+    await session.execute(
+        delete(Repository).where(Repository.id.in_(repo_ids))
+    )
+    await session.execute(
+        delete(FetchedDeveloper).where(
+            FetchedDeveloper.owner_id == owner.id,
+            FetchedDeveloper.developer_id == developer.id,
+        )
+    )
 
-    Event counts reflect publicly visible activity only.
-    """
+
+async def list_developers(
+    session: AsyncSession, viewer: Developer | None = None
+) -> list[dict]:
+    """Return explicit demos and profiles fetched by the current viewer."""
     developers = list((await session.scalars(select(Developer))).all())
     result: list[dict] = []
     for developer in developers:
+        if not developer.is_demo and viewer is None:
+            continue
+        owner_id = developer.id if developer.is_demo else viewer.id
+        if not developer.is_demo:
+            has_fetch = await session.scalar(
+                select(FetchedDeveloper.id).where(
+                    FetchedDeveloper.owner_id == viewer.id,
+                    FetchedDeveloper.developer_id == developer.id,
+                )
+            )
+            if has_fetch is None:
+                continue
         total_events = (
             await session.scalar(
                 select(func.count())
@@ -310,6 +402,7 @@ async def list_developers(session: AsyncSession) -> list[dict]:
                 .outerjoin(Repository, GithubEvent.repository_id == Repository.id)
                 .where(
                     GithubEvent.developer_id == developer.id,
+                    GithubEvent.owner_id == owner_id,
                     _public_event_filter(),
                 )
             )
@@ -320,6 +413,7 @@ async def list_developers(session: AsyncSession) -> list[dict]:
             .outerjoin(Repository, GithubEvent.repository_id == Repository.id)
             .where(
                 GithubEvent.developer_id == developer.id,
+                GithubEvent.owner_id == owner_id,
                 _public_event_filter(),
             )
         )

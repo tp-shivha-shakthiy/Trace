@@ -5,8 +5,8 @@ triggered from anywhere (background worker, tests, manual scripts):
 
 1. ``GitHubActivityService`` fetches and normalizes a developer bundle.
 2. The developer row is upserted (key: ``username``).
-3. Repositories are upserted (key: ``github_id``), refreshing metadata and
-   attaching the deterministic domain inference result.
+     3. Repositories are upserted (key: ``owner_id + github_id``), refreshing
+         metadata and attaching deterministic domain inference.
 4. Events are inserted with ``ON CONFLICT DO NOTHING`` (key:
    ``(developer_id, provider, github_event_id)``), so re-ingesting the same
    activity never duplicates rows.
@@ -76,9 +76,15 @@ def _repo_domains(repo: NormalizedRepo, inference: DomainInference) -> list[str]
     )
 
 
-def _repo_values(repo: NormalizedRepo, developer_id: int, domains: list[str]) -> dict:
+def _repo_values(
+    repo: NormalizedRepo,
+    developer_id: int,
+    owner_id: int | None,
+    domains: list[str],
+) -> dict:
     return {
         "developer_id": developer_id,
+        "owner_id": owner_id,
         "github_id": repo.github_id,
         "name": repo.name,
         "full_name": repo.full_name,
@@ -105,11 +111,13 @@ def _repo_values(repo: NormalizedRepo, developer_id: int, domains: list[str]) ->
 def _event_values(
     event: NormalizedEvent,
     developer_id: int,
+    owner_id: int | None,
     repository_ids: dict[str, int],
     repository_privacy: dict[str, bool],
 ) -> dict:
     return {
         "developer_id": developer_id,
+        "owner_id": owner_id,
         "repository_id": (
             repository_ids.get(event.repository_full_name)
             if event.repository_full_name
@@ -146,14 +154,19 @@ class IngestionService:
         self._domains = domain_inference or KeywordDomainInference()
 
     async def run(
-        self, username: str, *, token: str | None = None
+        self,
+        username: str,
+        *,
+        token: str | None = None,
+        owner_id: int | None = None,
     ) -> IngestionResult:
         bundle = await self._activity.fetch_developer(username, token=token)
         async with self._session_factory() as session:
             async with session.begin():
                 developer_id = await self._upsert_developer(session, bundle)
+                storage_owner_id = owner_id if owner_id is not None else developer_id
                 repository_ids = await self._upsert_repositories(
-                    session, bundle.repositories, developer_id
+                    session, bundle.repositories, developer_id, storage_owner_id
                 )
                 repository_privacy = {
                     repo.full_name: repo.is_private
@@ -163,6 +176,7 @@ class IngestionService:
                     session,
                     bundle.events,
                     developer_id,
+                    storage_owner_id,
                     repository_ids,
                     repository_privacy,
                 )
@@ -209,10 +223,13 @@ class IngestionService:
         session: AsyncSession,
         repos: list[NormalizedRepo],
         developer_id: int,
+        owner_id: int | None,
     ) -> dict[str, int]:
         """Upsert repo rows, returning a ``full_name -> repository_id`` map."""
         rows = [
-            _repo_values(repo, developer_id, _repo_domains(repo, self._domains))
+            _repo_values(
+                repo, developer_id, owner_id, _repo_domains(repo, self._domains)
+            )
             for repo in repos
         ]
         if not rows:
@@ -221,7 +238,7 @@ class IngestionService:
             pg_insert(Repository)
             .values(rows)
             .on_conflict_do_update(
-                index_elements=[Repository.github_id],
+                index_elements=[Repository.owner_id, Repository.github_id],
                 set_={
                     key: getattr(pg_insert(Repository).excluded, key)
                     for key in _REPO_UPDATE_KEYS
@@ -237,6 +254,7 @@ class IngestionService:
         session: AsyncSession,
         events: list[NormalizedEvent],
         developer_id: int,
+        owner_id: int | None,
         repository_ids: dict[str, int],
         repository_privacy: dict[str, bool],
     ) -> tuple[int, int]:
@@ -245,13 +263,26 @@ class IngestionService:
         if not events:
             return 0, 0
         rows = [
-            _event_values(e, developer_id, repository_ids, repository_privacy)
+            _event_values(
+                e,
+                developer_id,
+                owner_id,
+                repository_ids,
+                repository_privacy,
+            )
             for e in events
         ]
         stmt = (
             pg_insert(GithubEvent)
             .values(rows)
-            .on_conflict_do_nothing(constraint="uq_github_event_identity")
+            .on_conflict_do_nothing(
+                index_elements=[
+                    GithubEvent.owner_id,
+                    GithubEvent.developer_id,
+                    GithubEvent.provider,
+                    GithubEvent.github_event_id,
+                ]
+            )
             .returning(GithubEvent.id)
         )
         result = await session.execute(stmt)

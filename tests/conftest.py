@@ -17,7 +17,14 @@ from app import _loop
 from app.config import Settings
 from app.database import build_session_factory
 from app.github import GitHubClient
-from app.models import AuthSession, Developer, GithubEvent, Repository, SyncJob
+from app.models import (
+    AuthSession,
+    Developer,
+    FetchedDeveloper,
+    GithubEvent,
+    Repository,
+    SyncJob,
+)
 from app.schema import ensure_database_schema
 from sqlalchemy import delete
 from sqlalchemy.ext.asyncio import create_async_engine
@@ -163,7 +170,14 @@ async def test_engine():
 async def session_factory(test_engine):
     factory = build_session_factory(test_engine)
     async with test_engine.begin() as conn:
-        for model in (GithubEvent, Repository, SyncJob, AuthSession, Developer):
+        for model in (
+            GithubEvent,
+            Repository,
+            FetchedDeveloper,
+            SyncJob,
+            AuthSession,
+            Developer,
+        ):
             await conn.execute(delete(model))
     return factory
 

@@ -61,6 +61,7 @@ async def test_repository_persists_domains_and_languages(session_factory):
             await session.flush()
             repo = Repository(
                 developer_id=dev.id,
+                owner_id=dev.id,
                 github_id=101,
                 name="demo",
                 full_name="repoowner/demo",
@@ -99,6 +100,7 @@ async def test_unique_constraints_on_event(session_factory):
             await session.flush()
             event = GithubEvent(
                 developer_id=dev.id,
+                owner_id=dev.id,
                 provider="github",
                 event_type="commit",
                 github_event_id="999",
@@ -112,6 +114,7 @@ async def test_unique_constraints_on_event(session_factory):
             async with session.begin():
                 duplicate = GithubEvent(
                     developer_id=dev.id,
+                    owner_id=dev.id,
                     provider="github",
                     event_type="commit",
                     github_event_id="999",

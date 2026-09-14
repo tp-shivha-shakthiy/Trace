@@ -67,6 +67,7 @@ export interface DeveloperProfile {
   followers: number;
   following: number;
   is_owner: boolean;
+  is_fetched: boolean;
   summary: DeveloperSummary;
   repositories: RepositorySummary[];
   recent_activity: RecentActivity[];

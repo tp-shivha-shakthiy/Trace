@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useState } from "react";
-import { Link, useParams } from "react-router-dom";
+import { Link, useNavigate, useParams } from "react-router-dom";
 import {
   ApiError,
+  deleteFetchedProfile,
   formatDate,
   getMyProfile,
   getProfile,
@@ -21,11 +22,13 @@ type SyncState =
 
 export default function Developer({ self = false }: { self?: boolean }) {
   const { username = "" } = useParams();
+  const navigate = useNavigate();
   const [profile, setProfile] = useState<DeveloperProfile | null>(null);
   const [notFound, setNotFound] = useState(false);
   const [connectRequired, setConnectRequired] = useState(false);
   const [loading, setLoading] = useState(true);
   const [sync, setSync] = useState<SyncState>({ phase: "idle" });
+  const [deleting, setDeleting] = useState(false);
 
   const refresh = useCallback(async () => {
     setLoading(true);
@@ -73,6 +76,19 @@ export default function Developer({ self = false }: { self?: boolean }) {
         phase: "failed",
         message: err instanceof ApiError ? err.message : "Sync request failed",
       });
+    }
+  }
+
+  async function removeFetchedProfile() {
+    if (!profile || !window.confirm(`Delete your fetched data for @${profile.username}?`)) {
+      return;
+    }
+    setDeleting(true);
+    try {
+      await deleteFetchedProfile(profile.username);
+      navigate("/");
+    } finally {
+      setDeleting(false);
     }
   }
 
@@ -150,6 +166,11 @@ export default function Developer({ self = false }: { self?: boolean }) {
               </span>
             </div>
             <SyncButton state={sync} onSync={runSync} />
+            {profile.is_fetched && (
+              <button type="button" onClick={removeFetchedProfile} disabled={deleting}>
+                {deleting ? "Deleting…" : "Delete fetched data"}
+              </button>
+            )}
           </section>
 
           {sync.phase === "failed" && (

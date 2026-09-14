@@ -49,7 +49,7 @@ def _make_developer(username: str, github_id: int, **overrides) -> Developer:
     return Developer(**values)
 
 
-async def _seed_owner(session_factory, username: str):
+async def _seed_owner(session_factory, username: str, *, is_demo: bool = False):
     """Insert an owner with one public and one private repo (with events).
 
     The private repo carries unique signal evidence (Prolog language, a
@@ -59,12 +59,13 @@ async def _seed_owner(session_factory, username: str):
     github_id = _github_id(username)
     async with session_factory() as session:
         async with session.begin():
-            dev = _make_developer(username, github_id)
+            dev = _make_developer(username, github_id, is_demo=is_demo)
             session.add(dev)
             await session.flush()
 
             public_repo = Repository(
                 developer_id=dev.id,
+                owner_id=dev.id,
                 github_id=github_id + 1,
                 name="public",
                 full_name=f"{username}/public",
@@ -82,6 +83,7 @@ async def _seed_owner(session_factory, username: str):
             )
             private_repo = Repository(
                 developer_id=dev.id,
+                owner_id=dev.id,
                 github_id=github_id + 2,
                 name="secret",
                 full_name=f"{username}/secret",
@@ -104,6 +106,7 @@ async def _seed_owner(session_factory, username: str):
                 [
                     GithubEvent(
                         developer_id=dev.id,
+                        owner_id=dev.id,
                         repository_id=public_repo.id,
                         provider="github",
                         event_type="commit",
@@ -115,6 +118,7 @@ async def _seed_owner(session_factory, username: str):
                     ),
                     GithubEvent(
                         developer_id=dev.id,
+                        owner_id=dev.id,
                         repository_id=private_repo.id,
                         provider="github",
                         event_type="commit",
@@ -155,7 +159,7 @@ async def test_my_profile_includes_private_data(session_factory):
 async def test_other_users_public_profile_excludes_private_data(session_factory):
     from app.services import profiles
 
-    await _seed_owner(session_factory, "alice")
+    await _seed_owner(session_factory, "alice", is_demo=True)
     await _seed_owner(session_factory, "bob")
     async with session_factory() as session:
         profile = await profiles.get_developer_profile(session, "alice")
@@ -244,7 +248,7 @@ async def test_logout_without_session_is_successful(app):
 
 
 async def test_me_profile_endpoint_public_profile_split(app, session_factory):
-    _, token = await _seed_owner(session_factory, "alice")
+    _, token = await _seed_owner(session_factory, "alice", is_demo=True)
     await _seed_owner(session_factory, "bob")
 
     async with async_test_client(app) as client:
@@ -273,7 +277,7 @@ async def test_me_profile_endpoint_public_profile_split(app, session_factory):
 async def test_authenticated_bob_still_cannot_read_alice_private_data(
     app, session_factory,
 ):
-    await _seed_owner(session_factory, "alice")
+    await _seed_owner(session_factory, "alice", is_demo=True)
     _, bob_token = await _seed_owner(session_factory, "bob")
 
     async with async_test_client(app) as client:
@@ -296,7 +300,7 @@ async def test_authenticated_bob_still_cannot_read_alice_private_data(
 async def test_stored_oauth_token_never_appears_in_responses(
     app, session_factory,
 ):
-    await _seed_owner(session_factory, "alice")
+    await _seed_owner(session_factory, "alice", is_demo=True)
     _, bob_token = await _seed_owner(session_factory, "bob")
 
     def _assert_no_secrets(text: str):
@@ -320,7 +324,7 @@ async def test_stored_oauth_token_never_appears_in_responses(
 
 async def test_sync_authorization_controls_token_use(app, session_factory):
     """Only the account owner's sync may use the stored OAuth token."""
-    _, token = await _seed_owner(session_factory, "alice")
+    _, token = await _seed_owner(session_factory, "alice", is_demo=True)
     _, bob_token = await _seed_owner(session_factory, "bob")
 
     async def _job(job_id: str) -> SyncJob:

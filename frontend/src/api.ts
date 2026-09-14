@@ -44,6 +44,13 @@ export async function getProfile(username: string): Promise<DeveloperProfile> {
   return request<DeveloperProfile>(`/api/v1/developers/${username}`);
 }
 
+export async function deleteFetchedProfile(username: string): Promise<void> {
+  await request<void>(
+    `/api/v1/developers/${encodeURIComponent(username)}/fetched`,
+    { method: "DELETE" },
+  );
+}
+
 export async function getMe(): Promise<MeIdentity> {
   return request<MeIdentity>("/api/v1/me");
 }

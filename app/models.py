@@ -59,6 +59,8 @@ class Developer(Base, TimestampMixin):
     followers: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     following: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     public_repos: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    # Only explicitly marked demo identities may be viewed without a fetch owner.
+    is_demo: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     # OAuth access token for this developer (used for their syncs only).
     # Never exposed by the API.
     github_token: Mapped[str | None] = mapped_column(String(512), nullable=True)
@@ -67,14 +69,22 @@ class Developer(Base, TimestampMixin):
 class Repository(Base, TimestampMixin):
     __tablename__ = "repositories"
     __table_args__ = (
-        UniqueConstraint("github_id", name="uq_repositories_github_id"),
-        UniqueConstraint("full_name", name="uq_repositories_full_name"),
+        UniqueConstraint(
+            "owner_id", "github_id", name="uq_repositories_owner_github_id"
+        ),
+        UniqueConstraint(
+            "owner_id", "full_name", name="uq_repositories_owner_full_name"
+        ),
         Index("ix_repositories_developer_id", "developer_id"),
+        Index("ix_repositories_owner_id", "owner_id"),
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     developer_id: Mapped[int] = mapped_column(
         ForeignKey("developers.id", ondelete="CASCADE"), nullable=False
+    )
+    owner_id: Mapped[int | None] = mapped_column(
+        ForeignKey("developers.id", ondelete="CASCADE"), nullable=True
     )
     github_id: Mapped[int] = mapped_column(Integer, nullable=False)
     name: Mapped[str] = mapped_column(String(255), nullable=False)
@@ -116,17 +126,22 @@ class GithubEvent(Base):
         # Idempotency key: the same GitHub event must never be stored twice
         # for the same developer, regardless of how many times it is ingested.
         UniqueConstraint(
+            "owner_id",
             "developer_id",
             "provider",
             "github_event_id",
             name="uq_github_event_identity",
         ),
         Index("ix_github_events_developer_occurred", "developer_id", "occurred_at"),
+        Index("ix_github_events_owner_id", "owner_id"),
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     developer_id: Mapped[int] = mapped_column(
         ForeignKey("developers.id", ondelete="CASCADE"), nullable=False
+    )
+    owner_id: Mapped[int | None] = mapped_column(
+        ForeignKey("developers.id", ondelete="CASCADE"), nullable=True
     )
     repository_id: Mapped[int | None] = mapped_column(
         ForeignKey("repositories.id", ondelete="CASCADE"), nullable=True
@@ -148,6 +163,31 @@ class GithubEvent(Base):
     is_private: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
 
 
+class FetchedDeveloper(Base):
+    """A private record that a TRACE user fetched a GitHub identity."""
+
+    __tablename__ = "fetched_developers"
+    __table_args__ = (
+        UniqueConstraint(
+            "owner_id",
+            "developer_id",
+            name="uq_fetched_developers_owner_target",
+        ),
+        Index("ix_fetched_developers_owner_id", "owner_id"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    owner_id: Mapped[int] = mapped_column(
+        ForeignKey("developers.id", ondelete="CASCADE"), nullable=False
+    )
+    developer_id: Mapped[int] = mapped_column(
+        ForeignKey("developers.id", ondelete="CASCADE"), nullable=False
+    )
+    fetched_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+
 class SyncJob(Base):
     __tablename__ = "sync_jobs"
     __table_args__ = (Index("ix_sync_jobs_developer_username", "developer_username"),)
@@ -158,6 +198,9 @@ class SyncJob(Base):
     developer_username: Mapped[str] = mapped_column(String(39), nullable=False)
     developer_id: Mapped[int | None] = mapped_column(
         ForeignKey("developers.id", ondelete="SET NULL"), nullable=True
+    )
+    owner_id: Mapped[int | None] = mapped_column(
+        ForeignKey("developers.id", ondelete="CASCADE"), nullable=True
     )
     # When True the worker may run this job with the developer's stored OAuth
     # token (which exposes private data). Only the account owner may create a

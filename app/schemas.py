@@ -105,6 +105,7 @@ class DeveloperProfileResponse(BaseModel):
     # True only on the authenticated owner's own profile (GET /me/profile),
     # which is the only response that may include private data.
     is_owner: bool = False
+    is_fetched: bool = False
     summary: DeveloperSummaryResponse
     repositories: list[RepositorySummaryResponse]
     recent_activity: list[RecentActivityResponse]

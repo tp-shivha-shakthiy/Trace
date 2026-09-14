@@ -4,7 +4,8 @@
 ``GET  /sync/{id}``  - query job status (queued -> running -> succeeded/failed)
 """
 
-from fastapi import APIRouter, Depends, status
+from fastapi import APIRouter, Depends, HTTPException, status
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.deps import get_db, get_optional_current_developer, get_worker
@@ -40,8 +41,22 @@ async def create_sync(
     public data, so one user's OAuth token is never used to build another
     user's view.
     """
+    target = await db.scalar(
+        select(Developer).where(Developer.username == body.username)
+    )
+    if current is None and (target is None or not target.is_demo):
+        raise HTTPException(status_code=401, detail="Authentication required")
     use_token = current is not None and current.username == body.username
-    job_id = await worker.create_and_enqueue(body.username, use_token=use_token)
+    owner_id = (
+        None
+        if target is not None and target.is_demo and current is None
+        else current.id if current is not None else None
+    )
+    job_id = await worker.create_and_enqueue(
+        body.username,
+        use_token=use_token,
+        owner_id=owner_id,
+    )
     return SyncCreatedResponse(
         job_id=job_id,
         developer_username=body.username,
@@ -54,9 +69,13 @@ async def get_sync_job(
     job_id: str,
     db: AsyncSession = Depends(get_db),
     worker: IngestionJobWorker = Depends(get_worker),
+    current: Developer | None = Depends(get_optional_current_developer),
 ) -> SyncJobResponse:
     job = await worker.get_job(job_id)
-    if job is None:
+    if job is None or (
+        job.owner_id is not None
+        and (current is None or job.owner_id != current.id)
+    ):
         raise SyncJobNotFoundError(job_id)
     return SyncJobResponse(
         id=job.id,

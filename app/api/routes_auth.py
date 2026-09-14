@@ -82,7 +82,9 @@ async def github_callback(
     # Only this (now authenticated) owner may sync themselves with the token,
     # which is what makes their private repositories ingestible.
     job_id = await request.app.state.ingestion_worker.create_and_enqueue(
-        developer.username, use_token=True
+        developer.username,
+        use_token=True,
+        owner_id=developer.id,
     )
 
     response = JSONResponse(

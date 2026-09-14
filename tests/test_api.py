@@ -2,6 +2,7 @@
 
 import asyncio
 
+from app.models import Developer
 from app.services.jobs import IngestionJobWorker
 from tests.conftest import async_test_client
 
@@ -31,6 +32,16 @@ async def test_sync_and_profile_flow(app, session_factory):
     """
     worker: IngestionJobWorker = app.state.ingestion_worker
     assert worker is not None
+    async with session_factory() as session:
+        async with session.begin():
+            session.add(
+                Developer(
+                    github_id=999,
+                    username="octocat",
+                    name="Octocat",
+                    is_demo=True,
+                )
+            )
     await worker.start()
     try:
         async with async_test_client(app) as client:

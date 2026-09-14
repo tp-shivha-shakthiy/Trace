@@ -21,6 +21,7 @@ async def seed_developer(session_factory, username="octocat"):
                 github_id=github_id,
                 username=username,
                 name="Mona",
+                is_demo=True,
                 avatar_url="https://x/a",
                 html_url=f"https://github.com/{username}",
                 bio="Cat",
@@ -33,6 +34,7 @@ async def seed_developer(session_factory, username="octocat"):
 
             repo1 = Repository(
                 developer_id=dev.id,
+                owner_id=dev.id,
                 github_id=github_id + 1,
                 name="api",
                 full_name=f"{username}/api",
@@ -49,6 +51,7 @@ async def seed_developer(session_factory, username="octocat"):
             )
             repo2 = Repository(
                 developer_id=dev.id,
+                owner_id=dev.id,
                 github_id=github_id + 2,
                 name="app",
                 full_name=f"{username}/app",
@@ -70,6 +73,7 @@ async def seed_developer(session_factory, username="octocat"):
                 session.add(
                     GithubEvent(
                         developer_id=dev.id,
+                        owner_id=dev.id,
                         repository_id=(repo1.id if idx % 2 == 0 else repo2.id),
                         provider="github",
                         event_type="commit" if idx % 2 == 0 else "pull_request",
