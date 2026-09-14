@@ -1,0 +1,13 @@
+{
+  "name": "trace",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "dev": "concurrently -n api,web -c blue,green \"python serve.py\" \"npm --prefix frontend run dev\"",
+    "build": "npm --prefix frontend run build",
+    "start": "python serve.py"
+  },
+  "devDependencies": {
+    "concurrently": "^9.1.2"
+  }
+}
