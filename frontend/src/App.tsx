@@ -5,11 +5,7 @@ import Home from "./pages/Home";
 import Developer from "./pages/Developer";
 import type { MeIdentity } from "./types";
 
-function TopBar() {
-  const [me, setMe] = useState<MeIdentity | null>(null);
-  useEffect(() => {
-    getMe().then(setMe).catch(() => setMe(null));
-  }, []);
+function TopBar({ me }: { me: MeIdentity | null }) {
   return (
     <header className="topbar">
       <Link to="/" className="brand">
@@ -31,16 +27,22 @@ function TopBar() {
 }
 
 export default function App() {
+  const [me, setMe] = useState<MeIdentity | null>(null);
+
+  useEffect(() => {
+    getMe().then(setMe).catch(() => setMe(null));
+  }, []);
+
   return (
     <HashRouter>
       <div className="app">
-        <TopBar />
+        <TopBar me={me} />
         <main className="content">
           <Routes>
-            <Route path="/" element={<Home />} />
+            <Route path="/" element={<Home meUsername={me?.username} />} />
             <Route path="/me" element={<Developer self />} />
             <Route path="/developers/:username" element={<Developer />} />
-            <Route path="*" element={<Home />} />
+            <Route path="*" element={<Home meUsername={me?.username} />} />
           </Routes>
         </main>
         <footer className="footer">

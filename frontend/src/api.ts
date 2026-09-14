@@ -12,7 +12,7 @@ async function request<T>(
   path: string,
   init?: RequestInit,
 ): Promise<T> {
-  const response = await fetch(path, init);
+  const response = await fetch(path, { ...init, credentials: "include" });
   if (!response.ok) {
     let detail = `Request failed with status ${response.status}`;
     try {

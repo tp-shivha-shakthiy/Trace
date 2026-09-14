@@ -3,7 +3,7 @@ import { Link, useNavigate } from "react-router-dom";
 import { listDevelopers } from "../api";
 import type { DeveloperListItem } from "../types";
 
-export default function Home() {
+export default function Home({ meUsername }: { meUsername?: string }) {
   const navigate = useNavigate();
   const [username, setUsername] = useState("");
   const [developers, setDevelopers] = useState<DeveloperListItem[]>([]);
@@ -19,7 +19,13 @@ export default function Home() {
   function submit(event: React.FormEvent) {
     event.preventDefault();
     const name = username.trim();
-    if (name) navigate(`/developers/${encodeURIComponent(name)}`);
+    if (name) {
+      const route =
+        meUsername && name.toLowerCase() === meUsername.toLowerCase()
+          ? "/me"
+          : `/developers/${encodeURIComponent(name)}`;
+      navigate(route);
+    }
   }
 
   return (
@@ -57,7 +63,15 @@ export default function Home() {
           <ul className="dev-list">
             {developers.map((dev) => (
               <li key={dev.username}>
-                <Link to={`/developers/${dev.username}`} className="dev-row">
+                <Link
+                  to={
+                    meUsername &&
+                    dev.username.toLowerCase() === meUsername.toLowerCase()
+                      ? "/me"
+                      : `/developers/${dev.username}`
+                  }
+                  className="dev-row"
+                >
                   {dev.avatar_url ? (
                     <img
                       src={dev.avatar_url}
