@@ -5,7 +5,7 @@ from app.github import GitHubClient
 from app.models import Developer, GithubEvent, Repository
 from app.services.ingestion import IngestionService
 from sqlalchemy import func, select
-from tests.conftest import make_github_handler
+from tests.conftest import make_github_handler, make_repo
 
 
 async def test_ingest_developer_once(session_factory, ingestion_service):
@@ -76,6 +76,32 @@ async def test_ingest_empty_events(session_factory, test_settings):
             await session.scalar(select(func.count()).select_from(GithubEvent))
         )
         assert event_count == 0
+
+
+async def test_ingest_persists_private_flag_from_github(
+    session_factory, test_settings
+):
+    """GitHub's ``private`` field is persisted on repos and their events."""
+    repos = [make_repo(0, private=True), make_repo(1, private=False)]
+    handler = make_github_handler(repos=repos)
+    client = httpx.AsyncClient(
+        transport=httpx.MockTransport(handler), base_url="https://api.github.com"
+    )
+    service = IngestionService(
+        GitHubClient(test_settings, client=client), session_factory
+    )
+    await service.run("octocat")
+
+    async with session_factory() as session:
+        repos_rows = list(await session.scalars(select(Repository)))
+        by_name = {r.full_name: r for r in repos_rows}
+        assert by_name["octocat/repo-0"].is_private is True
+        assert by_name["octocat/repo-1"].is_private is False
+
+        events = list(await session.scalars(select(GithubEvent)))
+        # Events born out of the private repo carry the private flag; events
+        # on public repos do not.
+        assert any(e.is_private for e in events)
 
 
 async def test_ingest_empty_repositories(session_factory, test_settings):

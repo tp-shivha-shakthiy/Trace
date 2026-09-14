@@ -17,7 +17,7 @@ from app import _loop
 from app.config import Settings
 from app.database import build_session_factory
 from app.github import GitHubClient
-from app.models import Developer, GithubEvent, Repository, SyncJob
+from app.models import AuthSession, Developer, GithubEvent, Repository, SyncJob
 from app.schema import ensure_database_schema
 from sqlalchemy import delete
 from sqlalchemy.ext.asyncio import create_async_engine
@@ -53,7 +53,7 @@ def make_user(username: str = USERNAME) -> dict:
     }
 
 
-def make_repo(idx: int, username: str = USERNAME) -> dict:
+def make_repo(idx: int, username: str = USERNAME, *, private: bool = False) -> dict:
     languages = ["Python", "Go", "Rust", "JavaScript"][idx % 4]
     topics = ["api", "backend", "docker", "data", "testing", "docs"][idx % 6]
     return {
@@ -67,6 +67,7 @@ def make_repo(idx: int, username: str = USERNAME) -> dict:
         "language": languages,
         "topics": [topics],
         "fork": False,
+        "private": private,
         "stargazers_count": idx * 2,
         "forks_count": idx,
         "open_issues_count": 1,
@@ -162,7 +163,7 @@ async def test_engine():
 async def session_factory(test_engine):
     factory = build_session_factory(test_engine)
     async with test_engine.begin() as conn:
-        for model in (GithubEvent, Repository, SyncJob, Developer):
+        for model in (GithubEvent, Repository, SyncJob, AuthSession, Developer):
             await conn.execute(delete(model))
     return factory
 
