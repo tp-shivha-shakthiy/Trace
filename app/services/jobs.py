@@ -85,10 +85,17 @@ class IngestionJobWorker:
         self._tasks = []
         await self._github.aclose()
 
-    async def create_and_enqueue(self, username: str) -> str:
-        """Create a persisted ``queued`` job and hand its id to the queue."""
+    async def create_and_enqueue(
+        self, username: str, *, use_token: bool = False
+    ) -> str:
+        """Create a persisted ``queued`` job and hand its id to the queue.
+
+        ``use_token=True`` authorizes the worker to run this job with the
+        developer's stored OAuth token (ingesting private data). Only the
+        account owner should create token-backed jobs.
+        """
         async with self._session_factory() as session:
-            job = SyncJob(developer_username=username)
+            job = SyncJob(developer_username=username, use_token=use_token)
             session.add(job)
             await session.commit()
             job_id = job.id
@@ -120,7 +127,11 @@ class IngestionJobWorker:
             return
         await self._mark_running(job_id)
 
-        token = await self._developer_token(job.developer_username)
+        token = (
+            await self._developer_token(job.developer_username)
+            if job.use_token
+            else None
+        )
         service = IngestionService(
             self._github,
             self._session_factory,
