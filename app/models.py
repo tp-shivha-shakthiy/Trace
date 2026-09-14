@@ -12,6 +12,7 @@ from datetime import datetime
 from uuid import uuid4
 
 from sqlalchemy import (
+    Boolean,
     DateTime,
     ForeignKey,
     Index,
@@ -89,6 +90,9 @@ class Repository(Base, TimestampMixin):
     topics: Mapped[list | None] = mapped_column(JSONB, nullable=True)
     # Inferred coarse technical domains, e.g. ["backend", "devops"]
     domains: Mapped[list | None] = mapped_column(JSONB, nullable=True)
+    # True when the repository is private on GitHub. Owner-only data: it must
+    # never be served through public developer profile endpoints.
+    is_private: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     is_fork: Mapped[bool] = mapped_column(nullable=False, default=False)
     stargazers_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     forks_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
@@ -138,6 +142,10 @@ class GithubEvent(Base):
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
     payload: Mapped[dict] = mapped_column(JSONB, nullable=False)
+    # Visibility snapshot at ingestion: True when the event is associated with
+    # a private GitHub repository. Set alongside ``repositories.is_private``
+    # and enforced (along with the repo flag) at profile-read time.
+    is_private: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
 
 
 class SyncJob(Base):
@@ -151,6 +159,10 @@ class SyncJob(Base):
     developer_id: Mapped[int | None] = mapped_column(
         ForeignKey("developers.id", ondelete="SET NULL"), nullable=True
     )
+    # When True the worker may run this job with the developer's stored OAuth
+    # token (which exposes private data). Only the account owner may create a
+    # token-backed job; everyone else's syncs run anonymously (public only).
+    use_token: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     # queued | running | succeeded | failed
     status: Mapped[str] = mapped_column(String(16), default="queued", nullable=False)
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
@@ -168,4 +180,32 @@ class SyncJob(Base):
     )
     finished_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
+    )
+
+
+class AuthSession(Base):
+    """An opaque application session linking a browser to a Developer.
+
+    Created on GitHub OAuth success; the raw token is given to the browser as
+    an HttpOnly cookie and only its SHA-256 digest is stored here. Sessions
+    expire after ``settings.session_max_age_days``.
+    """
+
+    __tablename__ = "auth_sessions"
+    __table_args__ = (
+        UniqueConstraint("token_digest", name="uq_auth_sessions_token_digest"),
+        Index("ix_auth_sessions_developer_id", "developer_id"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    developer_id: Mapped[int] = mapped_column(
+        ForeignKey("developers.id", ondelete="CASCADE"), nullable=False
+    )
+    # SHA-256 hex digest of the opaque session token handed to the browser.
+    token_digest: Mapped[str] = mapped_column(String(64), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    expires_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
     )

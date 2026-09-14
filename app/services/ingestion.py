@@ -40,6 +40,7 @@ _REPO_UPDATE_KEYS = frozenset(
         "topics",
         "domains",
         "is_fork",
+        "is_private",
         "stargazers_count",
         "forks_count",
         "open_issues_count",
@@ -90,6 +91,7 @@ def _repo_values(repo: NormalizedRepo, developer_id: int, domains: list[str]) ->
         "topics": repo.topics,
         "domains": domains,
         "is_fork": repo.is_fork,
+        "is_private": repo.is_private,
         "stargazers_count": repo.stargazers_count,
         "forks_count": repo.forks_count,
         "open_issues_count": repo.open_issues_count,
@@ -104,6 +106,7 @@ def _event_values(
     event: NormalizedEvent,
     developer_id: int,
     repository_ids: dict[str, int],
+    repository_privacy: dict[str, bool],
 ) -> dict:
     return {
         "developer_id": developer_id,
@@ -118,6 +121,11 @@ def _event_values(
         "resource_id": event.resource_id,
         "occurred_at": event.occurred_at,
         "payload": event.payload,
+        "is_private": (
+            repository_privacy.get(event.repository_full_name, False)
+            if event.repository_full_name
+            else False
+        ),
     }
 
 
@@ -147,8 +155,16 @@ class IngestionService:
                 repository_ids = await self._upsert_repositories(
                     session, bundle.repositories, developer_id
                 )
+                repository_privacy = {
+                    repo.full_name: repo.is_private
+                    for repo in bundle.repositories
+                }
                 persisted, total = await self._insert_events(
-                    session, bundle.events, developer_id, repository_ids
+                    session,
+                    bundle.events,
+                    developer_id,
+                    repository_ids,
+                    repository_privacy,
                 )
         return IngestionResult(
             developer_id=developer_id,
@@ -222,12 +238,16 @@ class IngestionService:
         events: list[NormalizedEvent],
         developer_id: int,
         repository_ids: dict[str, int],
+        repository_privacy: dict[str, bool],
     ) -> tuple[int, int]:
         """Insert events, skipping conflicts. Returns (persisted, total)."""
         total = len(events)
         if not events:
             return 0, 0
-        rows = [_event_values(e, developer_id, repository_ids) for e in events]
+        rows = [
+            _event_values(e, developer_id, repository_ids, repository_privacy)
+            for e in events
+        ]
         stmt = (
             pg_insert(GithubEvent)
             .values(rows)

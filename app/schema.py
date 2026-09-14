@@ -16,6 +16,9 @@ from app.models import Base
 # ``(table, column_name, column_ddl)`` applied idempotently to existing tables.
 _ADDITIVE_COLUMNS: tuple[tuple[str, str, str], ...] = (
     ("developers", "github_token", "VARCHAR(512)"),
+    ("repositories", "is_private", "BOOLEAN NOT NULL DEFAULT FALSE"),
+    ("github_events", "is_private", "BOOLEAN NOT NULL DEFAULT FALSE"),
+    ("sync_jobs", "use_token", "BOOLEAN NOT NULL DEFAULT FALSE"),
 )
 
 

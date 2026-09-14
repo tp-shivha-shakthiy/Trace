@@ -51,6 +51,7 @@ class NormalizedRepo:
     topics: list[str]
     languages: dict[str, int]
     is_fork: bool
+    is_private: bool
     stargazers_count: int
     forks_count: int
     open_issues_count: int
@@ -173,6 +174,7 @@ def normalize_repo(raw: dict[str, Any]) -> NormalizedRepo:
         topics=[str(t) for t in topics],
         languages=_repo_languages(raw),
         is_fork=bool(raw.get("fork", False)),
+        is_private=bool(raw.get("private", False)),
         stargazers_count=int(raw.get("stargazers_count") or 0),
         forks_count=int(raw.get("forks_count") or 0),
         open_issues_count=int(raw.get("open_issues_count") or 0),

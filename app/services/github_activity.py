@@ -97,6 +97,7 @@ class GitHubActivityService:
             topics=repo.topics,
             languages=sorted_languages,
             is_fork=repo.is_fork,
+            is_private=repo.is_private,
             stargazers_count=repo.stargazers_count,
             forks_count=repo.forks_count,
             open_issues_count=repo.open_issues_count,
