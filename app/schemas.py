@@ -77,6 +77,7 @@ class RepositorySummaryResponse(BaseModel):
     languages: list[str]
     topics: list[str]
     domains: list[str]
+    is_private: bool = False
     stargazers_count: int
     forks_count: int
     pushed_at: datetime | None
@@ -101,9 +102,19 @@ class DeveloperProfileResponse(BaseModel):
     public_repos: int
     followers: int
     following: int
+    # True only on the authenticated owner's own profile (GET /me/profile),
+    # which is the only response that may include private data.
+    is_owner: bool = False
     summary: DeveloperSummaryResponse
     repositories: list[RepositorySummaryResponse]
     recent_activity: list[RecentActivityResponse]
+
+
+class MeResponse(BaseModel):
+    username: str
+    name: str | None
+    avatar_url: str | None
+    html_url: str | None
 
 
 class DeveloperListItemResponse(BaseModel):

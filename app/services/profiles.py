@@ -3,11 +3,27 @@
 Profiles are always built from local database state (never by calling GitHub
 at request time), which is what makes the profile endpoint the end-to-end
 demonstration of the ingestion pipeline.
+
+Visibility model
+----------------
+
+TRACE enforces the public/private boundary here, at the data-access layer:
+
+* ``get_developer_profile`` builds the **public** profile for a developer —
+  it only ever reads public repositories and public activity, so it can be
+  served to any other user (or an anonymous visitor) without leaking private
+  repositories, private activity, or intelligence derived exclusively from
+  private data (language/domain signals are recomputed over the visible
+  subset only).
+* ``get_my_profile`` builds the **full** (owner) profile for the *authenticated
+  developer* passed in by the caller — it includes private repositories and
+  private activity. It is only reachable via the authenticated ``/me``
+  endpoints, never through a client-supplied developer id.
 """
 
 from __future__ import annotations
 
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.errors import DeveloperNotFoundError
@@ -55,36 +71,100 @@ def _aggregate_domains(repos: list[Repository]) -> dict[str, DomainAggregate]:
     return aggregate_repository_domains(pairs)
 
 
+def _public_event_filter():
+    """Filter that keeps only events which are safe to expose publicly.
+
+    An event is public when it is not flagged private itself and it does not
+    belong to a private repository (the two flags are set together at
+    ingestion, but checking both protects against legacy/partial data).
+    """
+    return (GithubEvent.is_private.is_(False)) & or_(
+        Repository.id.is_(None),
+        Repository.is_private.is_(False),
+    )
+
+
 async def get_developer_profile(session: AsyncSession, username: str) -> dict:
-    """Build the full developer profile from persisted data."""
+    """Build the public developer profile (visible to any other user).
+
+    Private repositories, private activity, and any intelligence derived
+    exclusively from private data are excluded at the query level.
+    """
     developer = await session.scalar(
         select(Developer).where(Developer.username == username)
     )
     if developer is None:
         raise DeveloperNotFoundError(username)
-
-    repos = list(
-        (
-            await session.scalars(
-                select(Repository)
-                .where(Repository.developer_id == developer.id)
-                .order_by(
-                    Repository.stargazers_count.desc(),
-                    Repository.name.asc(),
-                )
-            )
-        ).all()
+    return await _assemble_profile(
+        session, developer, include_private=False, is_owner=False
     )
 
+
+async def get_my_profile(
+    session: AsyncSession, developer: Developer
+) -> dict:
+    """Build the full owner profile for the *authenticated* developer.
+
+    The caller is the dependency-injected current developer, so ownership is
+    the identity itself — no client-supplied id or username is trusted.
+    """
+    return await _assemble_profile(
+        session, developer, include_private=True, is_owner=True
+    )
+
+
+async def _assemble_profile(
+    session: AsyncSession,
+    developer: Developer,
+    *,
+    include_private: bool,
+    is_owner: bool,
+) -> dict:
+    """Assemble a profile from either the full or public data subset."""
+    repo_query = select(Repository).where(Repository.developer_id == developer.id)
+    if not include_private:
+        repo_query = repo_query.where(Repository.is_private.is_(False))
+    repo_query = repo_query.order_by(
+        Repository.stargazers_count.desc(),
+        Repository.name.asc(),
+    )
+    repos = list((await session.scalars(repo_query)).all())
+
     repo_by_id = {repo.id: repo for repo in repos}
+
+    recent_query = select(GithubEvent).where(
+        GithubEvent.developer_id == developer.id
+    )
+    count_query = select(
+        GithubEvent.repository_id,
+        GithubEvent.event_type,
+        func.count().label("count"),
+    ).where(GithubEvent.developer_id == developer.id)
+    month_expr = func.to_char(
+        func.date_trunc("month", GithubEvent.occurred_at), "YYYY-MM"
+    )
+    month_query = select(
+        month_expr.label("month"),
+        func.count().label("count"),
+    ).where(GithubEvent.developer_id == developer.id)
+
+    if not include_private:
+        recent_query = recent_query.outerjoin(
+            Repository, GithubEvent.repository_id == Repository.id
+        ).where(_public_event_filter())
+        count_query = count_query.outerjoin(
+            Repository, GithubEvent.repository_id == Repository.id
+        ).where(_public_event_filter())
+        month_query = month_query.outerjoin(
+            Repository, GithubEvent.repository_id == Repository.id
+        ).where(_public_event_filter())
 
     recent_events = list(
         (
             await session.scalars(
-                select(GithubEvent)
-                .where(GithubEvent.developer_id == developer.id)
-                .order_by(GithubEvent.occurred_at.desc())
-                .limit(RECENT_EVENTS_LIMIT)
+                recent_query.order_by(GithubEvent.occurred_at.desc()).limit(
+                    RECENT_EVENTS_LIMIT
+                )
             )
         ).all()
     )
@@ -93,13 +173,9 @@ async def get_developer_profile(session: AsyncSession, username: str) -> dict:
     event_rows = list(
         (
             await session.execute(
-                select(
-                    GithubEvent.repository_id,
-                    GithubEvent.event_type,
-                    func.count().label("count"),
+                count_query.group_by(
+                    GithubEvent.repository_id, GithubEvent.event_type
                 )
-                .where(GithubEvent.developer_id == developer.id)
-                .group_by(GithubEvent.repository_id, GithubEvent.event_type)
             )
         ).all()
     )
@@ -123,18 +199,10 @@ async def get_developer_profile(session: AsyncSession, username: str) -> dict:
                 )
 
     # Monthly event totals (last 12 months, ascending).
-    month_expr = func.to_char(
-        func.date_trunc("month", GithubEvent.occurred_at), "YYYY-MM"
-    )
     month_rows = list(
         (
             await session.execute(
-                select(
-                    month_expr.label("month"),
-                    func.count().label("count"),
-                )
-                .where(GithubEvent.developer_id == developer.id)
-                .group_by(month_expr)
+                month_query.group_by(month_expr)
                 .order_by(month_expr.desc())
                 .limit(ACTIVITY_MONTHS_LIMIT)
             )
@@ -169,6 +237,7 @@ async def get_developer_profile(session: AsyncSession, username: str) -> dict:
         "public_repos": developer.public_repos,
         "followers": developer.followers,
         "following": developer.following,
+        "is_owner": is_owner,
         "summary": {
             "total_repositories": len(repo_by_id),
             "total_events": total_events,
@@ -202,6 +271,7 @@ async def get_developer_profile(session: AsyncSession, username: str) -> dict:
                 "languages": [lang for lang in _repo_language_list(repo)],
                 "topics": repo.topics or [],
                 "domains": repo.domains or [],
+                "is_private": repo.is_private,
                 "stargazers_count": repo.stargazers_count,
                 "forks_count": repo.forks_count,
                 "pushed_at": repo.pushed_at,
@@ -226,7 +296,10 @@ async def get_developer_profile(session: AsyncSession, username: str) -> dict:
 
 
 async def list_developers(session: AsyncSession) -> list[dict]:
-    """Return brief profiles for every ingested developer."""
+    """Return brief public profiles for every ingested developer.
+
+    Event counts reflect publicly visible activity only.
+    """
     developers = list((await session.scalars(select(Developer))).all())
     result: list[dict] = []
     for developer in developers:
@@ -234,12 +307,20 @@ async def list_developers(session: AsyncSession) -> list[dict]:
             await session.scalar(
                 select(func.count())
                 .select_from(GithubEvent)
-                .where(GithubEvent.developer_id == developer.id)
+                .outerjoin(Repository, GithubEvent.repository_id == Repository.id)
+                .where(
+                    GithubEvent.developer_id == developer.id,
+                    _public_event_filter(),
+                )
             )
         ) or 0
         last_sync = await session.scalar(
-            select(func.max(GithubEvent.received_at)).where(
-                GithubEvent.developer_id == developer.id
+            select(func.max(GithubEvent.received_at))
+            .select_from(GithubEvent)
+            .outerjoin(Repository, GithubEvent.repository_id == Repository.id)
+            .where(
+                GithubEvent.developer_id == developer.id,
+                _public_event_filter(),
             )
         )
         result.append(

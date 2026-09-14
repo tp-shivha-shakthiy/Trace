@@ -21,7 +21,13 @@ from fastapi.staticfiles import StaticFiles
 from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker
 
 from app import _loop  # noqa: F401  (configures the asyncio policy on Windows)
-from app.api import routes_auth, routes_developers, routes_health, routes_sync
+from app.api import (
+    routes_auth,
+    routes_developers,
+    routes_health,
+    routes_me,
+    routes_sync,
+)
 from app.config import Settings, get_settings
 from app.database import build_engine, build_session_factory
 from app.errors import register_exception_handlers
@@ -93,6 +99,7 @@ def create_app(
     app.include_router(routes_developers.router)
     app.include_router(routes_developers.router, prefix=settings.api_v1_prefix)
     app.include_router(routes_sync.router, prefix=settings.api_v1_prefix)
+    app.include_router(routes_me.router, prefix=settings.api_v1_prefix)
 
     # When the SPA has been built (frontend/dist exists) it is served at "/".
     # Router registration above happens first, so /api, /auth, /health,
