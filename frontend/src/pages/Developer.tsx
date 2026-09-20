@@ -56,6 +56,10 @@ export default function Developer({ self = false }: { self?: boolean }) {
 
   const syncUsername = profile?.username ?? username;
 
+  const connectHref = self
+    ? "/auth/github"
+    : `/auth/github?next=/developers/${encodeURIComponent(syncUsername)}`;
+
   async function runSync() {
     setSync({ phase: "syncing", status: "queued" });
     try {
@@ -122,7 +126,7 @@ export default function Developer({ self = false }: { self?: boolean }) {
             (your own profile includes private repositories).
           </p>
           <p>
-            <a className="button" href="/auth/github">
+            <a className="button" href={connectHref}>
               Connect GitHub
             </a>
           </p>

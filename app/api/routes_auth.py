@@ -26,6 +26,19 @@ router = APIRouter(tags=["auth"])
 _STATE_COOKIE = "trace_oauth_state"
 
 
+def _safe_next_path(value: str | None) -> str:
+    """Normalize the internal SPA route to land on after OAuth.
+
+    Only literal application routes are accepted so the callback can never be
+    coerced into an open redirect to an external site.
+    """
+    if value is None:
+        return "/me"
+    if value in ("/", "/me") or value.startswith("/developers/"):
+        return value
+    return "/me"
+
+
 @router.post("/auth/logout")
 async def logout(
     request: Request,
@@ -44,9 +57,17 @@ async def logout(
 
 @router.get("/auth/github")
 async def github_login(request: Request) -> RedirectResponse:
-    """Redirect the browser to GitHub's OAuth consent screen."""
+    """Redirect the browser to GitHub's OAuth consent screen.
+
+    The optional ``?next=/developers/{username}`` query parameter (set by the
+    SPA when a developer page triggers the connect flow) is carried inside the
+    OAuth state and, after a successful callback, the browser is sent to that
+    SPA route instead of the default ``/#/me``.
+    """
     settings = request.app.state.settings
+    next_path = _safe_next_path(request.query_params.get("next"))
     state = secrets.token_urlsafe(32)
+    state = f"{state}|{next_path}" if next_path != "/me" else state
     redirect_uri = str(request.base_url) + "auth/github/callback"
     authorize_url = oauth.build_authorize_url(settings, redirect_uri, state)
     response = RedirectResponse(authorize_url, status_code=302)
@@ -65,6 +86,11 @@ async def github_callback(
     expected = request.cookies.get(_STATE_COOKIE)
     if not expected or state != expected:
         raise HTTPException(status_code=400, detail="Invalid OAuth state")
+
+    next_path = "/me"
+    if "|" in expected:
+        _, _, raw = expected.partition("|")
+        next_path = _safe_next_path(raw)
 
     client: httpx.AsyncClient = request.app.state.oauth_client
     token = await oauth.exchange_code(client, settings, code)
@@ -99,10 +125,11 @@ async def github_callback(
         }
     )
     # A browser ends up on this URL after GitHub redirects it back; send it
-    # into the SPA (hash route #/me) so the fresh session is actually used.
-    # Plain API/curl clients keep the JSON "connected" contract.
+    # into the SPA (hash route, default #/me or the developer page requested
+    # via ?next=) so the fresh session is actually used. Plain API/curl
+    # clients keep the JSON "connected" contract.
     if "text/html" in request.headers.get("accept", ""):
-        response = RedirectResponse(url="/#/me", status_code=303)
+        response = RedirectResponse(url=f"/#{next_path}", status_code=303)
     response.delete_cookie(_STATE_COOKIE)
     response.set_cookie(
         sessions.SESSION_COOKIE,

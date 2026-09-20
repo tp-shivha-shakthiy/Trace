@@ -192,6 +192,58 @@ async def test_authorize_redirect_when_configured(app):
     assert "client_id=client-1" in location
 
 
+async def test_authorize_carries_next_route_in_state(app):
+    from urllib.parse import unquote
+
+    from app.main import create_app
+
+    test_app = create_app(
+        settings=TOKEN_SETTINGS,
+        session_factory=app.state.session_factory,
+        github_client=app.state.ingestion_worker._github,
+    )
+    async with async_test_client(test_app) as client:
+        response = await client.get(
+            "/auth/github?next=/developers/octocat", follow_redirects=False
+        )
+        assert response.status_code == 302
+        location = response.headers["location"]
+        assert "|/developers/octocat" in unquote(location)
+        cookie = response.headers.get_list("set-cookie")[0]
+        assert "|/developers/octocat" in cookie
+
+        # A non-application next value is rejected at the authorize step.
+        rejected = await client.get(
+            "/auth/github?next=//evil.example", follow_redirects=False
+        )
+        assert rejected.status_code == 302
+        assert "evil.example" not in unquote(rejected.headers["location"])
+
+
+async def test_oauth_callback_redirects_to_requested_next_route(session_factory):
+    app = await _oauth_callback_app(session_factory)
+    async with async_test_client(app) as client:
+        client.cookies.set("trace_oauth_state", "s1|/developers/octocat")
+        response = await client.get(
+            "/auth/github/callback",
+            params={"code": "abc", "state": "s1|/developers/octocat"},
+            headers={"accept": "text/html"},
+        )
+        assert response.status_code == 303
+        assert response.headers["location"] == "/#/developers/octocat"
+
+    # Malicious / external next values fall back to the default /#/me.
+    async with async_test_client(app) as client:
+        client.cookies.set("trace_oauth_state", "s1|//evil.example")
+        response = await client.get(
+            "/auth/github/callback",
+            params={"code": "abc", "state": "s1|//evil.example"},
+            headers={"accept": "text/html"},
+        )
+        assert response.status_code == 303
+        assert response.headers["location"] == "/#/me"
+
+
 async def test_sync_uses_stored_token_in_requests(session_factory):
     seen: list[str] = []
     base = make_github_handler()
