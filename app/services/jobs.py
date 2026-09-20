@@ -17,7 +17,6 @@ process restart; see README "Current limitations".
 from __future__ import annotations
 
 import asyncio
-import contextlib
 import logging
 from datetime import UTC, datetime
 
@@ -33,7 +32,6 @@ from app.services.ingestion import IngestionService
 
 logger = logging.getLogger("trace.jobs")
 
-JOB_QUEUED = "queued"
 JOB_RUNNING = "running"
 JOB_SUCCEEDED = "succeeded"
 JOB_FAILED = "failed"
@@ -57,10 +55,6 @@ class IngestionJobWorker:
         self._language_repos_limit = language_repos_limit
         self._queue: asyncio.Queue[str] = asyncio.Queue()
         self._tasks: list[asyncio.Task] = []
-
-    @property
-    def queue(self) -> asyncio.Queue[str]:
-        return self._queue
 
     async def start(self) -> None:
         if self._tasks:
@@ -218,13 +212,3 @@ class IngestionJobWorker:
                 job.error_message = error_message
                 job.finished_at = datetime.now(UTC)
                 await session.commit()
-
-
-@contextlib.asynccontextmanager
-async def managed_worker(worker: IngestionJobWorker):
-    """Small helper for tests / scripts that run a worker manually."""
-    await worker.start()
-    try:
-        yield worker
-    finally:
-        await worker.stop()

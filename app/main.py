@@ -96,7 +96,6 @@ def create_app(
 
     app.include_router(routes_health.router)
     app.include_router(routes_auth.router)
-    app.include_router(routes_developers.router)
     app.include_router(routes_developers.router, prefix=settings.api_v1_prefix)
     app.include_router(routes_sync.router, prefix=settings.api_v1_prefix)
     app.include_router(routes_me.router, prefix=settings.api_v1_prefix)

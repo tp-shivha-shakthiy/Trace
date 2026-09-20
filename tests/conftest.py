@@ -183,18 +183,6 @@ async def session_factory(test_engine):
 
 
 @pytest.fixture
-def make_client():
-    """Factory for GitHubClient instances backed by MockTransport."""
-
-    def _make(
-        client: httpx.AsyncClient, settings: Settings | None = None
-    ) -> GitHubClient:
-        return GitHubClient(settings or Settings(), client=client)
-
-    return _make
-
-
-@pytest.fixture
 def mock_github_client(test_settings) -> GitHubClient:
     client = httpx.AsyncClient(
         transport=httpx.MockTransport(make_github_handler()),
@@ -226,11 +214,6 @@ def app(session_factory, mock_github_client):
         ),
     )
     yield app
-
-
-@pytest.fixture
-def now_utc() -> datetime:
-    return datetime.now(UTC)
 
 
 def async_test_client(app) -> httpx.AsyncClient:
