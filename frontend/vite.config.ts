@@ -5,13 +5,18 @@ import react from "@vitejs/plugin-react";
 // proxies API/auth calls to the local FastAPI server (default :8000).
 // In production the built assets are served by FastAPI itself (same origin),
 // so every request target is relative and needs no explicit base URL.
+//
+// changeOrigin must stay false: the backend builds the GitHub OAuth
+// redirect/callback URIs from the incoming Host header. If the proxy rewrote
+// it to :8000, the browser would be sent to GitHub with the wrong callback
+// URI and bounced back to a port where the OAuth state cookie never exists.
 export default defineConfig({
   plugins: [react()],
   server: {
     proxy: {
-      "/api": "http://localhost:8000",
-      "/auth": "http://localhost:8000",
-      "/health": "http://localhost:8000",
+      "/api": { target: "http://localhost:8000", changeOrigin: false },
+      "/auth": { target: "http://localhost:8000", changeOrigin: false },
+      "/health": { target: "http://localhost:8000", changeOrigin: false },
     },
   },
   build: {

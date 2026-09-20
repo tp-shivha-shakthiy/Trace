@@ -72,6 +72,10 @@ export default function Developer({ self = false }: { self?: boolean }) {
         await refresh();
       }
     } catch (err) {
+      if (err instanceof ApiError && err.status === 401) {
+        setConnectRequired(true);
+        return;
+      }
       setSync({
         phase: "failed",
         message: err instanceof ApiError ? err.message : "Sync request failed",
@@ -114,8 +118,8 @@ export default function Developer({ self = false }: { self?: boolean }) {
         <section className="card">
           <h1>Not connected</h1>
           <p>
-            Sign in with GitHub to view your TRACE profile, including private
-            repositories.
+            Sign in with GitHub to connect your account, then sync developers
+            (your own profile includes private repositories).
           </p>
           <p>
             <a className="button" href="/auth/github">

@@ -210,6 +210,16 @@ the container environment; secrets are never committed to the repository.
 
 ## Running the application
 
+### Local full-stack dev (one command)
+
+```bash
+npm run dev
+```
+
+`predev` starts PostgreSQL (`docker compose up -d postgres`), then Vite (frontend
+on `http://localhost:5173`) and the FastAPI backend (on `http://localhost:8000`)
+run concurrently. The developer sync scripts require PostgreSQL to be reachable.
+
 ### With Docker (recommended)
 
 ```bash

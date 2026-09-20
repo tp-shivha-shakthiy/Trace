@@ -3,6 +3,7 @@
   "version": "1.0.0",
   "private": true,
   "scripts": {
+    "predev": "docker compose up -d postgres",
     "dev": "concurrently -n api,web -c blue,green \"python serve.py\" \"npm --prefix frontend run dev\"",
     "build": "npm --prefix frontend run build",
     "start": "python serve.py"
