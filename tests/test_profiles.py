@@ -149,6 +149,18 @@ async def test_profile_includes_domain_signals(session_factory):
     frontend = by_domain["frontend"]
     assert len(frontend["evidence"]) >= 1
 
+    # TRACE Intelligence V1 assertions
+    assert "intelligence" in profile
+    intel_domains = {d["name"]: d for d in profile["intelligence"]["domains"]}
+    assert "Backend" in intel_domains
+    assert "Frontend" in intel_domains
+    backend_intel = intel_domains["Backend"]
+    assert backend_intel["strength"] in {"strong", "moderate", "emerging"}
+    assert backend_intel["repository_count"] >= 1
+    assert len(backend_intel["repositories"]) >= 1
+    first_repo_evidence = backend_intel["repositories"][0]["evidence"]
+    assert any(e["type"] == "language" for e in first_repo_evidence)
+
 
 async def test_profile_not_found(session_factory):
     async with session_factory() as session:

@@ -3,11 +3,12 @@ and per-developer token threading into ingestion."""
 
 import httpx
 import pytest
+from app.api.routes_auth import _landing_url, _next_target_username, _safe_next_path
 from app.config import Settings
 from app.errors import OAuthExchangeFailedError, OAuthNotConfiguredError
 from app.github import GitHubClient
 from app.main import create_app
-from app.models import Developer
+from app.models import Developer, SyncJob
 from app.services import oauth
 from app.services.ingestion import IngestionService
 from sqlalchemy import select
@@ -230,7 +231,7 @@ async def test_oauth_callback_redirects_to_requested_next_route(session_factory)
             headers={"accept": "text/html"},
         )
         assert response.status_code == 303
-        assert response.headers["location"] == "/#/developers/octocat"
+        assert response.headers["location"].startswith("/#/developers/octocat?job=")
 
     # Malicious / external next values fall back to the default /#/me.
     async with async_test_client(app) as client:
@@ -241,7 +242,113 @@ async def test_oauth_callback_redirects_to_requested_next_route(session_factory)
             headers={"accept": "text/html"},
         )
         assert response.status_code == 303
-        assert response.headers["location"] == "/#/me"
+        assert response.headers["location"].startswith("/#/me?job=")
+
+
+async def test_oauth_callback_syncs_target_developer_and_owner(session_factory):
+    """Connecting from another developer's page enqueues a public sync for
+    that developer (so the page we land on actually has data) plus the
+    owner's own token-backed sync; the redirect points the browser at the
+    target's job so the landing page polls the right one."""
+    app = await _oauth_callback_app(session_factory)
+    async with async_test_client(app) as client:
+        client.cookies.set("trace_oauth_state", "s1|/developers/octocat")
+        response = await client.get(
+            "/auth/github/callback",
+            params={"code": "abc", "state": "s1|/developers/octocat"},
+            headers={"accept": "text/html"},
+        )
+        assert response.status_code == 303
+        location = response.headers["location"]
+        assert location.startswith("/#/developers/octocat?job=")
+        poll_job_id = location.split("job=", 1)[1]
+
+    async with session_factory() as session:
+        jobs = list((await session.scalars(select(SyncJob))).all())
+        by_name = {job.developer_username: job for job in jobs}
+        assert set(by_name) == {"octocat", "oauthuser"}
+        assert by_name["octocat"].use_token is False
+        assert by_name["oauthuser"].use_token is True
+        owner_ids = {job.owner_id for job in jobs}
+        assert len(owner_ids) == 1 and None not in owner_ids
+        assert by_name["octocat"].id == poll_job_id
+
+
+def test_next_target_and_landing_url_helpers():
+    assert _next_target_username("/developers/octocat", "me") == "octocat"
+    assert _next_target_username("/me", "oauthuser") == "oauthuser"
+    assert _next_target_username("/", "oauthuser") == "oauthuser"
+    assert _landing_url("/me", "j1") == "/#/me?job=j1"
+    assert _landing_url("/developers/octocat", "j1") == "/#/developers/octocat?job=j1"
+    assert _landing_url("/", "j1") == "/#/"
+    assert _safe_next_path("//evil.example") == "/me"
+
+
+@pytest.mark.parametrize(
+    "next_value",
+    [
+        "/developers/",  # empty username
+        "/developers/octocat/repos",  # nested path
+        "/developers/../me",  # traversal
+        "/developers/octo%2Fcat",  # encoded slash
+        "/developers/octocat?job=x",  # smuggled query string
+        "/developers/octocat#frag",  # fragment
+        "/developers/-octocat",  # leading hyphen
+        "/developers/octocat-",  # trailing hyphen
+        "/developers/octo--cat",  # consecutive hyphens
+        "/developers/octo_cat",  # underscore is not allowed in logins
+        "/developers/octo cat",  # whitespace
+        "/developers/" + "a" * 40,  # longer than GitHub's 39-char limit
+        "/developers/octöcat",  # non-ASCII
+    ],
+)
+def test_malformed_developer_next_route_is_rejected(next_value):
+    """Regression: any text after ``/developers/`` used to become a GitHub
+    sync target. Malformed targets must fall back to the connecting user."""
+    assert _safe_next_path(next_value) == "/me"
+    assert _next_target_username(next_value, "oauthuser") == "oauthuser"
+
+
+@pytest.mark.parametrize(
+    "username", ["octocat", "a", "Octo-Cat-1", "x" * 39, "0day"]
+)
+def test_valid_developer_next_route_is_accepted(username):
+    route = f"/developers/{username}"
+    assert _safe_next_path(route) == route
+    assert _next_target_username(route, "oauthuser") == username
+
+
+def test_next_route_naming_connecting_user_in_other_case_is_self():
+    # GitHub logins are case-insensitive: this is the owner's own page, so
+    # it must resolve to the owner (token-backed) rather than a second user.
+    assert _next_target_username("/developers/OAuthUser", "oauthuser") == "oauthuser"
+
+
+async def test_oauth_callback_with_malformed_target_syncs_only_owner(
+    session_factory,
+):
+    """A tampered state naming a malformed developer route must not enqueue a
+    sync for that string; only the owner's token-backed sync is created and
+    the browser lands on its own profile."""
+    app = await _oauth_callback_app(session_factory)
+    state = "s1|/developers/octocat/../../admin"
+    async with async_test_client(app) as client:
+        client.cookies.set("trace_oauth_state", state)
+        response = await client.get(
+            "/auth/github/callback",
+            params={"code": "abc", "state": state},
+            headers={"accept": "text/html"},
+        )
+        assert response.status_code == 303
+        location = response.headers["location"]
+        assert location.startswith("/#/me?job=")
+        poll_job_id = location.split("job=", 1)[1]
+
+    async with session_factory() as session:
+        jobs = list((await session.scalars(select(SyncJob))).all())
+        assert [job.developer_username for job in jobs] == ["oauthuser"]
+        assert jobs[0].use_token is True
+        assert jobs[0].id == poll_job_id
 
 
 async def test_sync_uses_stored_token_in_requests(session_factory):
@@ -320,7 +427,7 @@ async def test_oauth_callback_redirects_browser_into_spa(session_factory):
             headers={"accept": "text/html"},
         )
         assert response.status_code == 303
-        assert response.headers["location"] == "/#/me"
+        assert response.headers["location"].startswith("/#/me?job=")
         assert "trace_session=" in response.headers.get("set-cookie", "")
 
         # API clients still receive the connected JSON, not a redirect.

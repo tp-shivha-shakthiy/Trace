@@ -11,6 +11,7 @@ Tokens are never returned to the browser.
 
 from __future__ import annotations
 
+import re
 import secrets
 
 import httpx
@@ -26,17 +27,65 @@ router = APIRouter(tags=["auth"])
 _STATE_COOKIE = "trace_oauth_state"
 
 
+_DEVELOPER_ROUTE_PREFIX = "/developers/"
+
+# GitHub login rules: 1-39 characters, ASCII letters/digits and single
+# hyphens, never starting or ending with a hyphen.
+_GITHUB_USERNAME_RE = re.compile(r"[A-Za-z0-9](?:[A-Za-z0-9]|-(?=[A-Za-z0-9])){0,38}")
+
+
+def _is_valid_github_username(value: str) -> bool:
+    return _GITHUB_USERNAME_RE.fullmatch(value) is not None
+
+
 def _safe_next_path(value: str | None) -> str:
     """Normalize the internal SPA route to land on after OAuth.
 
     Only literal application routes are accepted so the callback can never be
-    coerced into an open redirect to an external site.
+    coerced into an open redirect to an external site. A developer route is
+    accepted only as exactly ``/developers/<valid GitHub username>``: nested
+    paths, query strings, encoded characters or malformed usernames fall back
+    to ``/me``, because the username becomes a sync target.
     """
     if value is None:
         return "/me"
-    if value in ("/", "/me") or value.startswith("/developers/"):
+    if value in ("/", "/me"):
+        return value
+    if value.startswith(_DEVELOPER_ROUTE_PREFIX) and _is_valid_github_username(
+        value.removeprefix(_DEVELOPER_ROUTE_PREFIX)
+    ):
         return value
     return "/me"
+
+
+def _next_target_username(next_path: str, fallback: str) -> str:
+    """The developer implied by the SPA route landed on after OAuth.
+
+    Returns ``fallback`` (the connecting user) unless ``next_path`` is a
+    developer route naming a valid GitHub username, so an arbitrary path can
+    never become a sync target. GitHub logins are case-insensitive, so a
+    route naming the connecting user in any case resolves to ``fallback``.
+    """
+    if not next_path.startswith(_DEVELOPER_ROUTE_PREFIX):
+        return fallback
+    candidate = next_path.removeprefix(_DEVELOPER_ROUTE_PREFIX)
+    if not _is_valid_github_username(candidate):
+        return fallback
+    if candidate.casefold() == fallback.casefold():
+        return fallback
+    return candidate
+
+
+def _landing_url(next_path: str, job_id: str) -> str:
+    """SPA URL to send the browser to after a successful callback.
+
+    The landing page polls ``job_id`` so the initial sync progress is visible
+    instead of a profile that already looks synced.
+    """
+    url = f"/#{next_path}"
+    if next_path == "/me" or next_path.startswith("/developers/"):
+        url = f"{url}?job={job_id}"
+    return url
 
 
 @router.post("/auth/logout")
@@ -105,13 +154,21 @@ async def github_callback(
                 session, developer, max_age_days=settings.session_max_age_days
             )
 
-    # Only this (now authenticated) owner may sync themselves with the token,
-    # which is what makes their private repositories ingestible.
-    job_id = await request.app.state.ingestion_worker.create_and_enqueue(
-        developer.username,
-        use_token=True,
+    # The landing page (derived from ?next=) is synced first so the job the
+    # browser polls is the one that populates that page. The connecting owner
+    # also gets a token-backed sync so their own private profile stays fresh.
+    target_username = _next_target_username(next_path, developer.username)
+    poll_job_id = await request.app.state.ingestion_worker.create_and_enqueue(
+        target_username,
+        use_token=target_username == developer.username,
         owner_id=developer.id,
     )
+    if target_username != developer.username:
+        await request.app.state.ingestion_worker.create_and_enqueue(
+            developer.username,
+            use_token=True,
+            owner_id=developer.id,
+        )
 
     response = JSONResponse(
         {
@@ -121,7 +178,7 @@ async def github_callback(
                 f"GitHub account {developer.username} connected; "
                 "an initial sync has been enqueued."
             ),
-            "sync_job_id": job_id,
+            "sync_job_id": poll_job_id,
         }
     )
     # A browser ends up on this URL after GitHub redirects it back; send it
@@ -129,7 +186,9 @@ async def github_callback(
     # via ?next=) so the fresh session is actually used. Plain API/curl
     # clients keep the JSON "connected" contract.
     if "text/html" in request.headers.get("accept", ""):
-        response = RedirectResponse(url=f"/#{next_path}", status_code=303)
+        response = RedirectResponse(
+            url=_landing_url(next_path, poll_job_id), status_code=303
+        )
     response.delete_cookie(_STATE_COOKIE)
     response.set_cookie(
         sessions.SESSION_COOKIE,
