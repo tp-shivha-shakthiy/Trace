@@ -332,3 +332,270 @@ def test_all_scores_are_bounded_and_nonnegative():
         assert result.confidence in {"high", "medium", "low"}
         assert result.repository_count >= 1
         assert result.evidence
+
+
+# ---------------------------------------------------------------------------
+# TRACE Intelligence V1 Tests
+# ---------------------------------------------------------------------------
+
+
+def test_known_language_produces_expected_evidence():
+    intel = INFERENCE.infer_developer_intelligence(
+        repositories=[
+            evidence(
+                "org/backend-service",
+                languages={"Python": 3000},
+                topics=[],
+                description=None,
+            )
+        ]
+    )
+    by_name = {d.name: d for d in intel.domains}
+    assert "Backend" in by_name
+    backend = by_name["Backend"]
+    assert backend.repository_count == 1
+    repo = backend.repositories[0]
+    assert repo.name == "backend-service"
+    sig_types = {e.type: e.value for e in repo.evidence}
+    assert sig_types.get("language") == "Python"
+
+
+def test_known_topic_produces_expected_evidence():
+    intel = INFERENCE.infer_developer_intelligence(
+        repositories=[
+            evidence(
+                "org/cloud-infra",
+                languages={},
+                topics=["terraform", "kubernetes"],
+                description=None,
+            )
+        ]
+    )
+    by_name = {d.name: d for d in intel.domains}
+    assert "DevOps" in by_name
+    devops = by_name["DevOps"]
+    repo = devops.repositories[0]
+    topics = [e.value for e in repo.evidence if e.type == "topic"]
+    assert "terraform" in topics or "kubernetes" in topics
+
+
+def test_name_and_description_keyword_signals():
+    intel = INFERENCE.infer_developer_intelligence(
+        repositories=[
+            evidence(
+                "org/api-gateway",
+                languages={},
+                topics=[],
+                description="High throughput microservice with postgresql support",
+            )
+        ]
+    )
+    by_name = {d.name: d for d in intel.domains}
+    assert "Backend" in by_name
+    backend = by_name["Backend"]
+    repo = backend.repositories[0]
+    kw_values = [e.value for e in repo.evidence if e.type == "keyword"]
+    assert any(k in kw_values for k in ["api", "microservice", "postgresql"])
+
+
+def test_unknown_repository_produces_no_false_domain():
+    intel = INFERENCE.infer_developer_intelligence(
+        repositories=[
+            evidence(
+                "org/unknown-thing",
+                languages={"NonExistentLang123": 1000},
+                topics=["unrelatedtopic99"],
+                description="Random description without domain terms",
+            )
+        ]
+    )
+    assert len(intel.domains) == 0
+
+
+def test_duplicate_signals_are_deduplicated():
+    # "fastapi" in name, description, and topics
+    intel = INFERENCE.infer_developer_intelligence(
+        repositories=[
+            evidence(
+                "org/fastapi-project",
+                languages={},
+                topics=["fastapi"],
+                description="A fastapi backend project",
+            )
+        ]
+    )
+    by_name = {d.name: d for d in intel.domains}
+    backend = by_name.get("Backend")
+    assert backend is not None
+    repo = backend.repositories[0]
+    # "fastapi" should be captured as topic, and not duplicated into keyword
+    fastapi_signals = [e for e in repo.evidence if e.value.lower() == "fastapi"]
+    assert len(fastapi_signals) == 1
+    assert fastapi_signals[0].type == "topic"
+
+
+def test_scoring_and_thresholds_are_deterministic():
+    repos = [
+        evidence(
+            "dev/auth",
+            languages={"Python": 5000},
+            topics=["api", "backend", "fastapi"],
+            description="FastAPI authentication service",
+            event_count=80,
+        ),
+        evidence(
+            "dev/gateway",
+            languages={"Go": 3000},
+            topics=["api", "microservice"],
+            description="API gateway service",
+            event_count=40,
+        ),
+    ]
+    res1 = INFERENCE.infer_developer_intelligence(repositories=repos)
+    res2 = INFERENCE.infer_developer_intelligence(repositories=repos)
+    assert res1 == res2
+
+    by_name = {d.name: d for d in res1.domains}
+    backend = by_name["Backend"]
+    assert backend.strength == "strong"
+    assert backend.score >= 0.70
+    assert backend.repository_count == 2
+
+
+def test_minimum_evidence_rule_rejects_single_weak_keyword():
+    # Only repo name contains "data", with no language, topics, or second keyword
+    intel = INFERENCE.infer_developer_intelligence(
+        repositories=[
+            evidence(
+                "dev/my-data",
+                languages={},
+                topics=[],
+                description=None,
+                event_count=0,
+            )
+        ]
+    )
+    by_name = {d.name: d for d in intel.domains}
+    assert "Data" not in by_name
+
+
+def test_minimum_evidence_rule_accepts_topics_and_languages():
+    # Topic data alone should pass
+    topic_intel = INFERENCE.infer_developer_intelligence(
+        repositories=[
+            evidence(
+                "dev/experiment",
+                languages={},
+                topics=["data"],
+                description=None,
+            )
+        ]
+    )
+    assert "Data" in {d.name for d in topic_intel.domains}
+
+    # Language alone should pass
+    lang_intel = INFERENCE.infer_developer_intelligence(
+        repositories=[
+            evidence(
+                "dev/queries",
+                languages={"SQL": 1000},
+                topics=[],
+                description=None,
+            )
+        ]
+    )
+    assert "Data" in {d.name for d in lang_intel.domains}
+
+
+def test_developer_aggregation_multiple_repositories():
+    repos = [
+        evidence("org/api", languages={"Python": 2000}, topics=["api"]),
+        evidence("org/worker", languages={"Python": 2000}, topics=["backend"]),
+    ]
+    intel = INFERENCE.infer_developer_intelligence(repositories=repos)
+    by_name = {d.name: d for d in intel.domains}
+    backend = by_name["Backend"]
+    assert backend.repository_count == 2
+    repo_names = {r.name for r in backend.repositories}
+    assert repo_names == {"api", "worker"}
+
+
+def test_repositories_can_contribute_to_multiple_domains():
+    repos = [
+        evidence(
+            "org/fullstack-app",
+            languages={"Python": 2000, "TypeScript": 2000},
+            topics=["react", "fastapi"],
+            description="React frontend with FastAPI backend",
+        )
+    ]
+    intel = INFERENCE.infer_developer_intelligence(repositories=repos)
+    by_name = {d.name: d for d in intel.domains}
+    assert "Backend" in by_name
+    assert "Frontend" in by_name
+
+
+def test_weak_evidence_does_not_create_strong_classification():
+    repos = [
+        evidence(
+            "org/tiny",
+            languages={},
+            topics=["vue"],
+            description=None,
+            event_count=0,
+        )
+    ]
+    intel = INFERENCE.infer_developer_intelligence(repositories=repos)
+    by_name = {d.name: d for d in intel.domains}
+    frontend = by_name["Frontend"]
+    assert frontend.strength == "emerging"
+    assert frontend.strength != "strong"
+
+
+def test_evidence_is_traceable_to_repositories():
+    repos = [
+        evidence(
+            "org/trace-app",
+            languages={"Python": 4000},
+            topics=["fastapi"],
+            description="REST backend service",
+        )
+    ]
+    intel = INFERENCE.infer_developer_intelligence(repositories=repos)
+    backend = next(d for d in intel.domains if d.name == "Backend")
+    repo = backend.repositories[0]
+    assert repo.name == "trace-app"
+    assert repo.full_name == "org/trace-app"
+    types = {e.type for e in repo.evidence}
+    assert "language" in types
+    assert "topic" in types
+
+
+def test_same_named_repositories_are_grouped_by_full_name():
+    """Regression: evidence was grouped by short ``name``, so ``alice/api`` and
+    ``bob/api`` collapsed into one repository and one owner's signals were
+    silently overwritten by the other's."""
+    repos = [
+        evidence("alice/api", languages={"Python": 3000}, topics=["fastapi"]),
+        evidence("bob/api", languages={"Go": 3000}, topics=["graphql"]),
+    ]
+    intel = INFERENCE.infer_developer_intelligence(repositories=repos)
+    backend = next(d for d in intel.domains if d.name == "Backend")
+
+    assert backend.repository_count == 2
+    by_full_name = {r.full_name: r for r in backend.repositories}
+    assert set(by_full_name) == {"alice/api", "bob/api"}
+    # The short name is preserved for display on both entries.
+    assert {r.name for r in backend.repositories} == {"api"}
+    # Each repository keeps its own evidence rather than the other owner's.
+    alice_values = {(e.type, e.value) for e in by_full_name["alice/api"].evidence}
+    bob_values = {(e.type, e.value) for e in by_full_name["bob/api"].evidence}
+    assert ("language", "Python") in alice_values
+    assert ("topic", "fastapi") in alice_values
+    assert ("language", "Go") in bob_values
+    assert ("topic", "graphql") in bob_values
+    assert ("language", "Go") not in alice_values
+    assert ("language", "Python") not in bob_values
+    # Serialized form carries the identity too.
+    serialized = backend.to_dict()["repositories"]
+    assert {r["full_name"] for r in serialized} == {"alice/api", "bob/api"}

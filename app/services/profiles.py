@@ -30,6 +30,7 @@ from app.errors import DeveloperNotFoundError
 from app.models import Developer, FetchedDeveloper, GithubEvent, Repository
 from app.services.domains import (
     DomainAggregate,
+    IntelligenceService,
     KeywordDomainInference,
     RepositoryDomainEvidence,
     aggregate_repository_domains,
@@ -43,6 +44,7 @@ ACTIVITY_MONTHS_LIMIT = 12
 # Deterministic, stateless inference; recomputed on every profile read from
 # the persisted evidence so results always reflect the latest database state.
 _DEVELOPER_INFERENCE = KeywordDomainInference()
+_INTELLIGENCE_SERVICE = IntelligenceService(_DEVELOPER_INFERENCE)
 
 
 def _repo_language_list(repo: Repository) -> list[str]:
@@ -259,19 +261,24 @@ async def _assemble_profile(
 
     last_activity_at = recent_events[0].occurred_at if recent_events else None
 
+    repo_evidences = [
+        RepositoryDomainEvidence(
+            full_name=repo.full_name,
+            name=repo.name,
+            description=repo.description,
+            primary_language=repo.language,
+            languages=repo.languages or {},
+            topics=repo.topics or [],
+            event_count=events_by_repo.get(repo.id, 0),
+        )
+        for repo in repos
+    ]
+
     domain_signals = _DEVELOPER_INFERENCE.infer_developer_domains(
-        repositories=[
-            RepositoryDomainEvidence(
-                full_name=repo.full_name,
-                name=repo.name,
-                description=repo.description,
-                primary_language=repo.language,
-                languages=repo.languages or {},
-                topics=repo.topics or [],
-                event_count=events_by_repo.get(repo.id, 0),
-            )
-            for repo in repos
-        ]
+        repositories=repo_evidences
+    )
+    intelligence = _INTELLIGENCE_SERVICE.build_developer_intelligence(
+        repositories=repo_evidences
     )
 
     return {
@@ -287,6 +294,7 @@ async def _assemble_profile(
         "following": developer.following,
         "is_owner": is_owner,
         "is_fetched": is_fetched,
+        "intelligence": intelligence.to_dict(),
         "summary": {
             "total_repositories": len(repo_by_id),
             "total_events": total_events,

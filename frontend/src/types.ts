@@ -1,6 +1,31 @@
 // Types mirroring the TRACE API response schemas (app/schemas.py).
 
 export type Confidence = "high" | "medium" | "low";
+export type DomainStrength = "emerging" | "moderate" | "strong";
+
+export interface EvidenceSignal {
+  type: string;
+  value: string;
+}
+
+export interface RepositoryEvidence {
+  /** Repository identity (owner/name); `name` is display-only. */
+  full_name: string;
+  name: string;
+  evidence: EvidenceSignal[];
+}
+
+export interface DomainIntelligence {
+  name: string;
+  strength: DomainStrength;
+  score: number;
+  repository_count: number;
+  repositories: RepositoryEvidence[];
+}
+
+export interface DeveloperIntelligence {
+  domains: DomainIntelligence[];
+}
 
 export interface DomainSignal {
   domain: string;
@@ -71,6 +96,7 @@ export interface DeveloperProfile {
   summary: DeveloperSummary;
   repositories: RepositorySummary[];
   recent_activity: RecentActivity[];
+  intelligence?: DeveloperIntelligence | null;
 }
 
 export interface MeIdentity {

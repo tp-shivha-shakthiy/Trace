@@ -1,5 +1,5 @@
-import { useCallback, useEffect, useState } from "react";
-import { Link, useNavigate, useParams } from "react-router-dom";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import {
   ApiError,
   deleteFetchedProfile,
@@ -7,8 +7,10 @@ import {
   getMyProfile,
   getProfile,
   syncAndWait,
+  waitForJob,
 } from "../api";
 import {
+  DomainIntelligenceCard,
   DomainSignalCard,
   LanguagePills,
   MonthBars,
@@ -29,6 +31,7 @@ export default function Developer({ self = false }: { self?: boolean }) {
   const [loading, setLoading] = useState(true);
   const [sync, setSync] = useState<SyncState>({ phase: "idle" });
   const [deleting, setDeleting] = useState(false);
+  const [searchParams, setSearchParams] = useSearchParams();
 
   const refresh = useCallback(async () => {
     setLoading(true);
@@ -53,6 +56,75 @@ export default function Developer({ self = false }: { self?: boolean }) {
   useEffect(() => {
     void refresh();
   }, [refresh]);
+
+  // When OAuth lands us here with ?job=<id>, the callback enqueued the sync
+  // that populates this page; poll it so the initial sync is visible instead
+  // of a profile that already looks synced.
+  //
+  // The job id is moved out of the URL into component state. Polling depends
+  // only on that state, so stripping ``?job=`` from the URL (which changes
+  // ``searchParams``) never cancels it. Each polling run owns an
+  // AbortController that cleanup aborts, which both stops further requests
+  // and discards stale updates; under StrictMode's mount -> cleanup -> mount
+  // the first run is aborted before it can update state, leaving exactly one
+  // effective poller.
+  const [trackedJob, setTrackedJob] = useState<string | null>(() =>
+    searchParams.get("job"),
+  );
+  const urlJob = searchParams.get("job");
+  useEffect(() => {
+    if (!urlJob) return;
+    setTrackedJob(urlJob);
+    const params = new URLSearchParams(searchParams);
+    params.delete("job");
+    setSearchParams(params, { replace: true });
+  }, [urlJob, searchParams, setSearchParams]);
+
+  // Latest refresh() without making it a polling dependency: a new refresh
+  // identity (e.g. route change) must not restart an in-flight poll.
+  const refreshRef = useRef(refresh);
+  useEffect(() => {
+    refreshRef.current = refresh;
+  }, [refresh]);
+
+  useEffect(() => {
+    if (!trackedJob) return;
+    const controller = new AbortController();
+    const { signal } = controller;
+    setSync({ phase: "syncing", status: "queued" });
+    (async () => {
+      try {
+        const job = await waitForJob(
+          trackedJob,
+          (status) => {
+            if (!signal.aborted) setSync({ phase: "syncing", status });
+          },
+          signal,
+        );
+        if (signal.aborted) return;
+        setTrackedJob(null);
+        if (job.status === "failed") {
+          setSync({
+            phase: "failed",
+            message: job.error_message || "Sync failed without an error message",
+          });
+        } else {
+          setSync({ phase: "idle" });
+          await refreshRef.current();
+        }
+      } catch (err) {
+        if (signal.aborted) return;
+        setTrackedJob(null);
+        setSync({
+          phase: "failed",
+          message: err instanceof ApiError ? err.message : "Sync failed",
+        });
+      }
+    })();
+    return () => {
+      controller.abort();
+    };
+  }, [trackedJob]);
 
   const syncUsername = profile?.username ?? username;
 
@@ -112,6 +184,9 @@ export default function Developer({ self = false }: { self?: boolean }) {
             activity to build their domain profile.
           </p>
           <SyncButton state={sync} onSync={runSync} />
+          {sync.phase === "failed" && (
+            <p className="error">Sync failed: {sync.message}</p>
+          )}
           <p className="muted">
             <Link to="/">← back to all developers</Link>
           </p>
@@ -193,24 +268,38 @@ export default function Developer({ self = false }: { self?: boolean }) {
               <b>{profile.summary.total_events}</b> events
             </span>
             <span>
-              <b>{profile.summary.domain_signals.length}</b> domains inferred
+              <b>
+                {profile.intelligence
+                  ? profile.intelligence.domains.length
+                  : profile.summary.domain_signals.length}
+              </b>{" "}
+              domains inferred
             </span>
             <span>last activity {formatDate(profile.summary.last_activity_at)}</span>
           </section>
 
           <section className="signals">
-            <h2>Domain signals</h2>
-            {profile.summary.domain_signals.length === 0 ? (
-              <p className="muted">
-                No domain signals yet — TRACE has no language, topic, or
-                keyword evidence for this developer.
-              </p>
-            ) : (
+            <h2>Developer intelligence</h2>
+            {profile.intelligence && profile.intelligence.domains.length > 0 ? (
+              <div className="signal-grid">
+                {profile.intelligence.domains.map((domain) => (
+                  <DomainIntelligenceCard
+                    key={domain.name}
+                    intelligence={domain}
+                  />
+                ))}
+              </div>
+            ) : profile.summary.domain_signals.length > 0 ? (
               <div className="signal-grid">
                 {profile.summary.domain_signals.map((signal) => (
                   <DomainSignalCard key={signal.domain} signal={signal} />
                 ))}
               </div>
+            ) : (
+              <p className="muted">
+                No domain intelligence yet — TRACE has no language, topic, or
+                keyword evidence for this developer.
+              </p>
             )}
           </section>
 

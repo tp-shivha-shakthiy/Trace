@@ -1,67 +1,60 @@
-"""Deterministic, transparent technical-domain inference for TRACE v0.4.
+"""Deterministic, transparent technical-domain inference for TRACE Intelligence V1.
 
-This is the first TRACE *intelligence layer*: it converts persisted GitHub
+This is the TRACE intelligence layer: it converts persisted GitHub
 evidence into per-domain signals that answer "which domains does this
 developer work in, how strong is the evidence, and why?".
 
 Signals (only fields that TRACE actually persists across ``repositories`` and
 ``github_events`` are used):
 
-* **language**      - the repository's language breakdown (byte share, or the
-                      primary language when only one is known)
-* **keywords**      - topics / name / description matches against curated
-                      domain keyword sets
-* **activity**      - event volume on a repository is used only to *amplify*
-                      an existing signal and to report "sustained activity";
-                      activity alone never creates a domain
+* **language**    - the repository's language breakdown (byte share, or the
+                    primary language when only one is known)
+* **topics**      - repository GitHub topics
+* **keywords**    - repository name and description keyword matches against
+                    curated domain keyword sets
+* **activity**    - event volume on a repository is used only to *amplify*
+                    an existing signal and to report "sustained activity";
+                    activity alone never creates a domain
 
-Evidence we do *not* have yet (so we do not use them): dependency/package
-manifests, README content, commit diffs, starred/contributed-third-party
-repos. See README "Current limitations".
+Scoring & Deduplication:
+* Language evidence: share of bytes * 1.0 (max 1.0 per repo).
+* Topic evidence: 0.50 per matched topic.
+* Name keyword: 0.25 per matched name keyword.
+* Description keyword: 0.20 per matched description keyword.
+* Deduplication: signal terms matching as topics are not double counted in name or
+  description; keyword contribution per repo is capped at 0.80.
+* Activity amplification: 0.20 * min(1.0, events / 50) for signaled domains.
+* Max intensity per repo per domain: 1.50.
 
-Scoring (per repository, per domain an intensity in [0, 2.0]):
-
-    intensity = language_evidence + keyword_evidence + activity_evidence
-    language_evidence : share of bytes * 1.0   (max 1.0 per repo)
-    keyword_evidence  : 0.5 per matched keyword-group (one group per domain
-                        per repo, so this is at most 0.5 per repo)
-    activity_evidence : 0.3 * min(1, events / 50)   (only for signaled domains)
-
-Across a developer the *raw* intensity is summed per domain and normalized:
-
-    score = min(1.0, raw / 3.0)
-
-``SCORE_SCALE = 3.0`` is roughly the combined evidence of one-to-two clearly
-relevant repositories, so a score of 1.0 is the bounded ceiling. A score is an
-**evidence score / estimated relevance** — it is *not* a proficiency or skill
-measurement.
-
-Confidence (high / medium / low) is policy-driven and deliberately decoupled
-from score magnitude so a strong-looking score from one weak signal can never
-produce high confidence:
-
-* ``high``   - two or more supporting repositories, both language and keyword
-               evidence present, sustained activity, raw >= 2.4
-* ``medium`` - either language *and* keyword evidence (one sufficiently
-               described repo) or evidence across two or more repository rows
-* ``low``    - anything else (e.g. a lone keyword, or a lonely language-only
-               repository)
-
-Every result carries explicit, string-valued ``evidence`` reasons that are
-derived directly from the persisted data.
-
-The ``DomainInference`` protocol remains the abstraction boundary: the
-ingestion pipeline calls ``infer_repository_domains`` and the profile layer
-calls ``infer_developer_domains``, so a future ML classifier can replace
-``KeywordDomainInference`` without touching either caller.
+Aggregation & Minimum-Evidence Rule:
+* Total developer domain score: min(1.0, round(raw / 3.0, 2)).
+* Minimum-evidence rule: single weak keywords (e.g. repo name containing 'data' alone)
+  are filtered out. A domain requires confirmed language evidence, explicit topic
+  evidence, or multiple distinct keywords with raw intensity >= 0.40.
+* Strength levels: emerging, moderate, strong (no unverified employment claims).
 """
 
 from __future__ import annotations
 
 from collections.abc import Iterable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from re import IGNORECASE, compile
 from typing import Protocol
+
+# Canonical display names for supported domains
+DOMAIN_DISPLAY_NAMES: dict[str, str] = {
+    "backend": "Backend",
+    "frontend": "Frontend",
+    "devops": "DevOps",
+    "data": "Data",
+    "ml": "ML",
+    "mobile": "Mobile",
+    "security": "Security",
+    "systems": "Systems",
+    "gaming": "Gaming",
+    "web": "Web",
+    "testing": "Testing",
+}
 
 # language -> coarse domains. Keys match GitHub's canonical language names.
 LANGUAGE_DOMAINS: dict[str, set[str]] = {
@@ -130,7 +123,8 @@ DOMAIN_KEYWORDS: list[tuple[set[str], str]] = [
     (
         {
             "backend", "api", "server", "rest", "graphql", "microservice",
-            "microservices", "authentication", "service",
+            "microservices", "authentication", "service", "fastapi",
+            "django", "flask", "postgresql", "postgres",
         },
         "backend",
     ),
@@ -168,16 +162,110 @@ DOMAIN_KEYWORDS: list[tuple[set[str], str]] = [
 
 MAX_DOMAINS_PER_REPOSITORY = 3
 
-# --- Developer-level scoring constants (see module docstring) ---------------
-_LANGUAGE_WORK = 1.0           # max per-domain intensity from language share
-_KEYWORD_WORK = 0.5            # per matched keyword-group weight
-_ACTIVITY_WORK = 0.3           # max per-domain intensity from event activity
-_ACTIVITY_EVENT_SCALE = 50     # events needed for full activity contribution
-_REPO_CONTRIBUTION_CAP = 2.0   # max intensity a single repo yields per domain
-_SCORE_SCALE = 3.0             # raw intensity -> score (score = min(1, raw/3))
-_CONFIDENCE_RAW_HIGH = 2.4     # raw threshold for the "high" tier
-_MIN_INTENSITY = 1e-9          # anything below is treated as no evidence
-_MAX_EVIDENCE_LINES = 4        # evidence reasons shown per domain
+# --- Scoring weights & limits (V1 deterministic evidence model) ---
+_WEIGHT_LANGUAGE = 1.0           # max per-domain intensity from 100% byte share
+_WEIGHT_TOPIC = 0.50             # per distinct matched topic
+_WEIGHT_NAME_KEYWORD = 0.25      # per distinct repository name keyword match
+_WEIGHT_DESCRIPTION_KEYWORD = 0.20  # per distinct description keyword match
+_KEYWORD_CONTRIBUTION_CAP = 0.80 # max non-language intensity per repo per domain
+_ACTIVITY_WORK = 0.20            # max per-domain intensity from event activity
+_ACTIVITY_EVENT_SCALE = 50       # events needed for full activity contribution
+_REPO_CONTRIBUTION_CAP = 1.50    # max intensity a single repo yields per domain
+_SCORE_SCALE = 3.0               # raw intensity -> score (score = min(1, raw/3))
+_CONFIDENCE_RAW_HIGH = 2.4       # raw threshold for legacy "high" confidence tier
+_MIN_INTENSITY = 1e-9            # threshold below which intensity is ignored
+_MAX_EVIDENCE_LINES = 4          # summary lines shown per domain in legacy format
+
+
+# --- Data Structures ---
+
+@dataclass(frozen=True)
+class EvidenceSignal:
+    """A single atomic piece of evidence derived from repository metadata."""
+
+    type: str  # "language", "topic", "keyword"
+    value: str
+
+    def to_dict(self) -> dict[str, str]:
+        return {"type": self.type, "value": self.value}
+
+
+@dataclass(frozen=True)
+class RepositoryEvidence:
+    """The evidence collected from one repository for one domain.
+
+    ``full_name`` (``owner/name``) is the repository identity; ``name`` is
+    kept only for display, since different owners can share a repo name.
+    """
+
+    full_name: str
+    name: str
+    evidence: list[EvidenceSignal]
+
+    def to_dict(self) -> dict:
+        return {
+            "full_name": self.full_name,
+            "name": self.name,
+            "evidence": [e.to_dict() for e in self.evidence],
+        }
+
+
+@dataclass(frozen=True)
+class DomainIntelligence:
+    """Developer-level intelligence for a technical domain."""
+
+    name: str  # e.g. "Backend"
+    strength: str  # "strong", "moderate", "emerging"
+    score: float
+    repository_count: int
+    repositories: list[RepositoryEvidence]
+
+    def to_dict(self) -> dict:
+        return {
+            "name": self.name,
+            "strength": self.strength,
+            "score": self.score,
+            "repository_count": self.repository_count,
+            "repositories": [r.to_dict() for r in self.repositories],
+        }
+
+
+@dataclass(frozen=True)
+class DeveloperIntelligence:
+    """Aggregated technical intelligence for a developer."""
+
+    domains: list[DomainIntelligence] = field(default_factory=list)
+
+    def to_dict(self) -> dict:
+        return {"domains": [d.to_dict() for d in self.domains]}
+
+
+@dataclass(frozen=True)
+class RepositoryDomainEvidence:
+    """The persisted evidence TRACE uses to classify one repository."""
+
+    full_name: str
+    name: str
+    description: str | None
+    primary_language: str | None
+    languages: dict[str, int]
+    topics: list[str]
+    event_count: int
+
+
+@dataclass(frozen=True)
+class DeveloperDomainResult:
+    """Per-domain inference outcome for a developer (backward-compatible view).
+
+    ``score`` is an evidence score bounded in [0, 1]. ``confidence`` is one of
+    ``high`` / ``medium`` / ``low``. ``evidence`` lists human-readable summary lines.
+    """
+
+    domain: str
+    score: float
+    confidence: str
+    evidence: list[str]
+    repository_count: int
 
 
 class DomainInference(Protocol):
@@ -198,35 +286,11 @@ class DomainInference(Protocol):
         repositories: Iterable[RepositoryDomainEvidence] = (),
     ) -> list[DeveloperDomainResult]: ...
 
-
-@dataclass(frozen=True)
-class RepositoryDomainEvidence:
-    """The persisted evidence TRACE uses to classify one repository."""
-
-    full_name: str
-    name: str
-    description: str | None
-    primary_language: str | None
-    languages: dict[str, int]
-    topics: list[str]
-    event_count: int
-
-
-@dataclass(frozen=True)
-class DeveloperDomainResult:
-    """Per-domain inference outcome for a developer.
-
-    ``score`` is an **evidence score** (estimated relevance), bounded in
-    [0, 1], never a proficiency claim. ``confidence`` is one of
-    ``high`` / ``medium`` / ``low`` and reflects how *independent* and
-    *broad* the evidence is. ``evidence`` lists the explicit reasons.
-    """
-
-    domain: str
-    score: float
-    confidence: str
-    evidence: list[str]
-    repository_count: int
+    def infer_developer_intelligence(
+        self,
+        *,
+        repositories: Iterable[RepositoryDomainEvidence] = (),
+    ) -> DeveloperIntelligence: ...
 
 
 def _language_domains(language: str) -> set[str]:
@@ -249,6 +313,7 @@ class _RepoDomainEvidence:
     domains: dict[str, float]
     languages: dict[str, list[str]]
     keywords: dict[str, list[str]]
+    signals: dict[str, list[EvidenceSignal]]
     has_activity: bool
 
 
@@ -292,6 +357,100 @@ class KeywordDomainInference:
         )
         return ranked[:MAX_DOMAINS_PER_REPOSITORY]
 
+    def infer_developer_intelligence(
+        self,
+        *,
+        repositories: Iterable[RepositoryDomainEvidence] = (),
+    ) -> DeveloperIntelligence:
+        raw: dict[str, float] = {}
+        # domain -> repository full_name (identity) -> evidence signals
+        repos_by_domain: dict[str, dict[str, list[EvidenceSignal]]] = {}
+        # repository full_name -> display name
+        display_names: dict[str, str] = {}
+        has_language_by_domain: dict[str, bool] = {}
+        has_topic_by_domain: dict[str, bool] = {}
+        keywords_by_domain: dict[str, set[str]] = {}
+
+        for repo in repositories:
+            classified = self._score_repository(repo)
+            if not classified.domains:
+                continue
+            for domain, intensity in classified.domains.items():
+                if intensity <= _MIN_INTENSITY:
+                    continue
+                raw[domain] = raw.get(domain, 0.0) + intensity
+                signals = classified.signals.get(domain, [])
+                if signals:
+                    repos_by_domain.setdefault(domain, {})[repo.full_name] = signals
+                    display_names[repo.full_name] = repo.name
+                    for s in signals:
+                        if s.type == "language":
+                            has_language_by_domain[domain] = True
+                        elif s.type == "topic":
+                            has_topic_by_domain[domain] = True
+                        elif s.type == "keyword":
+                            keywords_by_domain.setdefault(domain, set()).add(s.value)
+
+        domain_intelligences: list[DomainIntelligence] = []
+        for domain, intensity in raw.items():
+            if intensity <= _MIN_INTENSITY:
+                continue
+            has_lang = has_language_by_domain.get(domain, False)
+            has_top = has_topic_by_domain.get(domain, False)
+            kw_count = len(keywords_by_domain.get(domain, set()))
+
+            # Enforce minimum-evidence rule
+            if not self._passes_minimum_evidence(
+                has_language=has_lang,
+                has_topic=has_top,
+                keyword_count=kw_count,
+                raw_intensity=intensity,
+            ):
+                continue
+
+            repo_dict = repos_by_domain.get(domain, {})
+            repo_count = len(repo_dict)
+            if repo_count == 0:
+                continue
+
+            score = min(1.0, round(intensity / _SCORE_SCALE, 2))
+            strength = self._strength_for(score=score, repository_count=repo_count)
+            display_name = DOMAIN_DISPLAY_NAMES.get(domain, domain.title())
+
+            repo_evidences: list[RepositoryEvidence] = []
+            for full_name in sorted(repo_dict.keys()):
+                repo_signals = repo_dict[full_name]
+                unique_signals = {
+                    (s.type, s.value): s for s in repo_signals
+                }.values()
+                type_order = {"language": 0, "topic": 1, "keyword": 2}
+                sorted_signals = sorted(
+                    unique_signals,
+                    key=lambda s: (type_order.get(s.type, 99), s.value),
+                )
+                repo_evidences.append(
+                    RepositoryEvidence(
+                        full_name=full_name,
+                        name=display_names[full_name],
+                        evidence=sorted_signals,
+                    )
+                )
+
+            domain_intelligences.append(
+                DomainIntelligence(
+                    name=display_name,
+                    strength=strength,
+                    score=score,
+                    repository_count=repo_count,
+                    repositories=repo_evidences,
+                )
+            )
+
+        domain_intelligences.sort(
+            key=lambda d: (-d.score, -d.repository_count, d.name)
+        )
+        return DeveloperIntelligence(domains=domain_intelligences)
+
     def infer_developer_domains(
         self,
         *,
@@ -309,7 +468,7 @@ class KeywordDomainInference:
             if not classified.domains:
                 continue
             for domain, intensity in classified.domains.items():
-                raw[domain] = raw.get(domain, 0) + intensity
+                raw[domain] = raw.get(domain, 0.0) + intensity
                 repos_by_domain.setdefault(domain, set()).add(repo.full_name)
                 languages_by_domain.setdefault(domain, set()).update(
                     classified.languages.get(domain, [])
@@ -361,45 +520,150 @@ class KeywordDomainInference:
     def _score_repository(
         self, repo: RepositoryDomainEvidence
     ) -> _RepoDomainEvidence:
-        result = _RepoDomainEvidence({}, {}, {}, repo.event_count > 0)
+        domains: dict[str, float] = {}
+        languages_by_domain: dict[str, list[str]] = {}
+        keywords_by_domain: dict[str, list[str]] = {}
+        signals_by_domain: dict[str, list[EvidenceSignal]] = {}
 
-        # language evidence (byte-share weighted, deterministic)
+        # 1. Language evidence (byte-share weighted, deterministic)
         shares = _language_shares(repo)
         for language, share in shares.items():
+            if share <= 0:
+                continue
             for domain in _language_domains(language):
                 if not domain:
                     continue
-                result.domains[domain] = (
-                    result.domains.get(domain, 0) + share * _LANGUAGE_WORK
+                lang_weight = share * _WEIGHT_LANGUAGE
+                domains[domain] = domains.get(domain, 0.0) + lang_weight
+                languages_by_domain.setdefault(domain, []).append(language)
+                signals_by_domain.setdefault(domain, []).append(
+                    EvidenceSignal(type="language", value=language)
                 )
-                result.languages.setdefault(domain, []).append(language)
 
-        # keyword evidence (topics / name / description)
-        haystack = " ".join(
-            [repo.name, repo.description or "", *repo.topics]
-        ).lower()
-        for pattern, domain in self._patterns:
-            if not pattern.search(haystack):
+        # 2. Topic evidence & keyword deduplication
+        # Track seen normalized terms per domain in this repository to prevent
+        # double-counting
+        seen_terms: dict[str, set[str]] = {}
+        keyword_weights: dict[str, float] = {}
+
+        # Check explicit topics first
+        for topic in repo.topics:
+            topic_norm = topic.strip().lower()
+            if not topic_norm:
                 continue
-            matched = self._matched_keywords(domain, haystack)
-            # Every domain group can match at most once per repository, so
-            # this stays at exactly _KEYWORD_WORK and never reaches the cap.
-            result.keywords.setdefault(domain, []).extend(matched)
-            result.domains[domain] = (
-                result.domains.get(domain, 0) + _KEYWORD_WORK
-            )
+            for pattern, domain in self._patterns:
+                if pattern.search(topic_norm):
+                    matched = self._matched_keywords(domain, topic_norm)
+                    for term in matched:
+                        if term not in seen_terms.setdefault(domain, set()):
+                            seen_terms[domain].add(term)
+                            keyword_weights[domain] = (
+                                keyword_weights.get(domain, 0.0) + _WEIGHT_TOPIC
+                            )
+                            signals_by_domain.setdefault(domain, []).append(
+                                EvidenceSignal(type="topic", value=topic)
+                            )
+                            keywords_by_domain.setdefault(domain, []).append(term)
 
-        # activity evidence only amplifies existing signals.
-        if result.domains and repo.event_count > 0:
-            activity = _ACTIVITY_WORK * min(
-                1.0, repo.event_count / _ACTIVITY_EVENT_SCALE
+        # 3. Repository Name keywords
+        repo_name_lower = repo.name.lower()
+        for pattern, domain in self._patterns:
+            if pattern.search(repo_name_lower):
+                matched = self._matched_keywords(domain, repo_name_lower)
+                for term in matched:
+                    if term not in seen_terms.setdefault(domain, set()):
+                        seen_terms[domain].add(term)
+                        keyword_weights[domain] = (
+                            keyword_weights.get(domain, 0.0) + _WEIGHT_NAME_KEYWORD
+                        )
+                        signals_by_domain.setdefault(domain, []).append(
+                            EvidenceSignal(type="keyword", value=term)
+                        )
+                        keywords_by_domain.setdefault(domain, []).append(term)
+
+        # 4. Description keywords
+        if repo.description:
+            desc_lower = repo.description.lower()
+            for pattern, domain in self._patterns:
+                if pattern.search(desc_lower):
+                    matched = self._matched_keywords(domain, desc_lower)
+                    for term in matched:
+                        if term not in seen_terms.setdefault(domain, set()):
+                            seen_terms[domain].add(term)
+                            keyword_weights[domain] = (
+                                keyword_weights.get(domain, 0.0)
+                                + _WEIGHT_DESCRIPTION_KEYWORD
+                            )
+                            signals_by_domain.setdefault(domain, []).append(
+                                EvidenceSignal(type="keyword", value=term)
+                            )
+                            keywords_by_domain.setdefault(domain, []).append(term)
+
+        # Combine language and capped keyword evidence
+        all_domains = set(domains.keys()) | set(keyword_weights.keys())
+        final_domains: dict[str, float] = {}
+
+        for domain in all_domains:
+            lang_contrib = domains.get(domain, 0.0)
+            kw_contrib = min(
+                _KEYWORD_CONTRIBUTION_CAP, keyword_weights.get(domain, 0.0)
             )
-            for domain in result.domains:
-                amplified = result.domains[domain] + activity
-                result.domains[domain] = min(
-                    _REPO_CONTRIBUTION_CAP, amplified
+            base_intensity = lang_contrib + kw_contrib
+
+            # Activity only amplifies existing evidence
+            if base_intensity > 0 and repo.event_count > 0:
+                activity = _ACTIVITY_WORK * min(
+                    1.0, repo.event_count / _ACTIVITY_EVENT_SCALE
                 )
-        return result
+                total = min(_REPO_CONTRIBUTION_CAP, base_intensity + activity)
+            else:
+                total = min(_REPO_CONTRIBUTION_CAP, base_intensity)
+
+            final_domains[domain] = total
+
+        return _RepoDomainEvidence(
+            domains=final_domains,
+            languages=languages_by_domain,
+            keywords=keywords_by_domain,
+            signals=signals_by_domain,
+            has_activity=repo.event_count > 0,
+        )
+
+    def _passes_minimum_evidence(
+        self,
+        *,
+        has_language: bool,
+        has_topic: bool,
+        keyword_count: int,
+        raw_intensity: float,
+    ) -> bool:
+        """Enforce the minimum-evidence rule for TRACE Intelligence V1.
+
+        A domain is only considered meaningful if it has:
+        1. Confirmed language evidence in the domain, OR
+        2. Explicit repository topic tag evidence in the domain, OR
+        3. Multiple distinct keyword matches (>= 2) AND sufficient aggregate
+           intensity (>= 0.40).
+
+        A single weak keyword (e.g. repo name containing 'data' alone) yields
+        raw intensity < 0.40 and keyword_count < 2, so it is filtered out.
+        """
+        if has_language or has_topic:
+            return True
+        if keyword_count >= 2 and raw_intensity >= 0.40:
+            return True
+        return False
+
+    def _strength_for(self, *, score: float, repository_count: int) -> str:
+        """Map evidence score to human-readable strength levels.
+
+        Returns 'strong', 'moderate', or 'emerging'.
+        """
+        if score >= 0.70 and (repository_count >= 2 or score >= 0.85):
+            return "strong"
+        if score >= 0.40:
+            return "moderate"
+        return "emerging"
 
     def _matched_keywords(self, domain: str, haystack: str) -> list[str]:
         words = []
@@ -458,6 +722,18 @@ class KeywordDomainInference:
                 f"{len(repos)} {domain}-related repositories"
             )
         return lines[:_MAX_EVIDENCE_LINES]
+
+
+class IntelligenceService:
+    """Service orchestrating TRACE Intelligence V1."""
+
+    def __init__(self, inference: DomainInference | None = None) -> None:
+        self._inference = inference or KeywordDomainInference()
+
+    def build_developer_intelligence(
+        self, repositories: Iterable[RepositoryDomainEvidence]
+    ) -> DeveloperIntelligence:
+        return self._inference.infer_developer_intelligence(repositories=repositories)
 
 
 def _language_shares(repo: RepositoryDomainEvidence) -> dict[str, float]:

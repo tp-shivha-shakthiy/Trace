@@ -71,8 +71,54 @@ export async function enqueueSync(username: string): Promise<SyncCreated> {
   });
 }
 
-export async function getSyncJob(jobId: string): Promise<SyncJob> {
-  return request<SyncJob>(`/api/v1/sync/${jobId}`);
+export async function getSyncJob(
+  jobId: string,
+  signal?: AbortSignal,
+): Promise<SyncJob> {
+  return request<SyncJob>(`/api/v1/sync/${encodeURIComponent(jobId)}`, {
+    signal,
+  });
+}
+
+/** Resolve after ``ms``, or reject with the signal's reason once aborted. */
+function delay(ms: number, signal?: AbortSignal): Promise<void> {
+  return new Promise((resolve, reject) => {
+    if (signal?.aborted) {
+      reject(signal.reason);
+      return;
+    }
+    const timer = setTimeout(() => {
+      signal?.removeEventListener("abort", onAbort);
+      resolve();
+    }, ms);
+    function onAbort() {
+      clearTimeout(timer);
+      reject(signal?.reason);
+    }
+    signal?.addEventListener("abort", onAbort, { once: true });
+  });
+}
+
+/**
+ * Poll a background sync job until it finishes.
+ *
+ * Aborting ``signal`` stops polling (including an in-flight request) and
+ * rejects with the abort reason, so callers can tear polling down on unmount.
+ */
+export async function waitForJob(
+  jobId: string,
+  onStatus?: (status: string) => void,
+  signal?: AbortSignal,
+): Promise<SyncJob> {
+  for (let attempt = 0; attempt < 120; attempt += 1) {
+    signal?.throwIfAborted();
+    const job = await getSyncJob(jobId, signal);
+    signal?.throwIfAborted();
+    onStatus?.(job.status);
+    if (job.status === "succeeded" || job.status === "failed") return job;
+    await delay(1000, signal);
+  }
+  throw new ApiError(408, "Sync timed out waiting for the job to finish");
 }
 
 /** Enqueue a sync and poll until the background job finishes. */
@@ -81,13 +127,7 @@ export async function syncAndWait(
   onStatus?: (status: string) => void,
 ): Promise<SyncJob> {
   const created = await enqueueSync(username);
-  for (let attempt = 0; attempt < 120; attempt += 1) {
-    const job = await getSyncJob(created.job_id);
-    onStatus?.(job.status);
-    if (job.status === "succeeded" || job.status === "failed") return job;
-    await new Promise((resolve) => setTimeout(resolve, 1000));
-  }
-  throw new ApiError(408, "Sync timed out waiting for the job to finish");
+  return waitForJob(created.job_id, onStatus);
 }
 
 export function formatDate(value: string | null | undefined): string {

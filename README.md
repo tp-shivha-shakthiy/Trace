@@ -392,52 +392,87 @@ PostgreSQL (never by calling GitHub at request time). It includes:
 - `repositories` — per-repo metadata, languages, topics, and inferred domains.
 - `recent_activity` — the latest normalized events.
 
-### Domain inference (v0.4 intelligence layer)
+### Domain inference (TRACE Intelligence V1)
 
 TRACE performs **deterministic and explainable domain inference**
-(`app/services/domains.py::KeywordDomainInference`). The
-`DomainInference` protocol is the abstraction boundary: ingestion classifies
-each repository via `infer_repository_domains`, and the profile endpoint
-re-runs developer-level inference via `infer_developer_domains` over the
-persisted evidence.
+(`app/services/domains.py::KeywordDomainInference`). All results are
+recomputed from persisted repositories and event counts; nothing is fetched
+from GitHub at read time and intelligence is not yet stored.
 
-`summary.domain_signals` answers *"which domains does this developer work in,
-how strong is the evidence, and why?"*:
+**One per-repository scorer, three outputs.** Every output below is built on
+the same per-repository scorer (`_score_repository`), so the weights and caps
+apply to all of them. The previous v0.4 weights (0.5 per keyword group, 0.3
+activity, 2.0 per-repository cap) are **no longer used anywhere**.
+
+| Output | Produced by | Minimum-evidence rule |
+|---|---|---|
+| `intelligence.domains` | `infer_developer_intelligence` (primary, shown in the UI) | yes |
+| `summary.domain_signals` | `infer_developer_domains` (legacy shape) | no |
+| `summary.domains`, `repositories[].domains` | `infer_repository_domains`, stored at ingestion time | no |
+
+**Per-repository, per-domain intensity:**
+
+- **Language:** byte share of each language × `1.0` (at most `1.0` per
+  repository). When only the primary language is known it counts as a full
+  share. At ingestion time (`infer_repository_domains`) every known language
+  is weighted equally, because byte counts are not passed to that call.
+- **Topics:** `0.50` per distinct domain keyword matched in a topic.
+- **Repository name:** `0.25` per distinct domain keyword.
+- **Description:** `0.20` per distinct domain keyword.
+- **Deduplication:** a keyword already counted from a topic is not counted
+  again from the name or description of the same repository.
+- **Keyword cap:** topic + name + description evidence is capped at `0.80`
+  per repository per domain.
+- **Activity:** `0.20 × min(1, events / 50)` is added only when the domain
+  already has evidence in that repository; activity alone never creates a
+  domain.
+- **Repository cap:** total intensity is capped at `1.50` per repository per
+  domain.
+
+**Developer level:** repository intensities are summed per domain and
+normalized as `score = min(1.0, raw / 3.0)` (rounded to 2 decimals in
+`intelligence`, 3 in `domain_signals`).
+
+- **Minimum-evidence rule** (`intelligence` only): a domain is kept only with
+  language evidence, topic evidence, or at least 2 distinct keywords with raw
+  intensity ≥ `0.40`. A lone name keyword (e.g. a repo called `my-data`) does
+  not create a domain.
+- **Strength** (`intelligence`): `strong` when score ≥ `0.70` and
+  (≥ 2 repositories or score ≥ `0.85`); `moderate` when score ≥ `0.40`;
+  otherwise `emerging`.
+- **Confidence** (`domain_signals`): `high` requires ≥ 2 repositories, both
+  language and keyword evidence, activity, and raw ≥ `2.4`; `medium` requires
+  language **and** keyword evidence or ≥ 2 repositories; otherwise `low`.
+- **Repository identity:** evidence is grouped by `full_name` (`owner/name`);
+  `name` is display-only, so same-named repositories from different owners
+  stay separate.
+- **`score` is an *evidence score*, not a skill or proficiency
+  measurement**, and strength levels make no seniority claims.
+- Identical evidence always yields identical output.
+
+Example `intelligence.domains[]` entry:
 
 ```json
 {
-  "domain": "backend",
+  "name": "Backend",
+  "strength": "strong",
   "score": 0.82,
-  "confidence": "high",
-  "evidence": [
-    "backend signaled by language evidence (Python) in dev/auth-api, dev/billing",
-    "backend keywords detected (api, backend) in dev/auth-api, dev/billing",
-    "sustained activity: 180 events across 2 backend-related repositories"
-  ],
-  "repository_count": 2
+  "repository_count": 2,
+  "repositories": [
+    {
+      "full_name": "dev/auth-api",
+      "name": "auth-api",
+      "evidence": [
+        {"type": "language", "value": "Python"},
+        {"type": "topic", "value": "fastapi"}
+      ]
+    }
+  ]
 }
 ```
 
-Key points:
-
-- **Signals** come only from persisted fields: language breakdown (byte
-  share), the primary language, topics, name/description keywords, and event
-  activity (activity amplifies an existing signal but never creates one).
-  Scores are summed per domain, normalized to `[0, 1]` and bounded.
-- **`score` is an *evidence score* / estimated relevance, not a skill or
-  proficiency measurement.** Wording in the API and docs keeps this explicit.
-- **`confidence`** (`high`/`medium`/`low`) is policy-based and decoupled from
-  score magnitude, so a lone weak signal can never produce high confidence:
-  *high* requires ≥2 supporting repositories with both language and keyword
-  evidence plus sustained activity; *medium* requires language **and** keyword
-  evidence (one well-described repo) or evidence across ≥2 repositories;
-  everything else is *low*.
-- Every result carries human-readable **`evidence`** reasons generated
-  directly from the data, so the result is auditable.
-- **Sparse metadata** and developers with no useful evidence produce low or no
-  domain signals instead of fabricated ones.
-- The implementation is fully **deterministic**: identical evidence yields
-  identical scores.
+See [`docs/intelligence_v1.md`](docs/intelligence_v1.md) for the full
+specification.
 
 ## API endpoints
 
@@ -457,8 +492,10 @@ persisted data into:
 
 - `summary.total_repositories` / `total_events` / `languages`
 - `summary.domains` — repositories per technical domain (baseline classifier)
-- `summary.domain_signals` — scored, explainable domain inference
+- `summary.domain_signals` — legacy scored domain inference
   (`domain`, `score`, `confidence`, `evidence`, `repository_count`)
+- `intelligence.domains` — TRACE Intelligence V1 domains with strength and
+  per-repository evidence (see *Domain inference* above)
 - `summary.events_by_domain` — activity volume per domain
 - `summary.activity` — event counts per activity type (push, pull_request, …)
 - `summary.events_per_month` — 12-month activity trend

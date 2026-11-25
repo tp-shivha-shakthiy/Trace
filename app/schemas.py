@@ -91,6 +91,30 @@ class RecentActivityResponse(BaseModel):
     occurred_at: datetime
 
 
+class EvidenceSignalResponse(BaseModel):
+    type: str
+    value: str
+
+
+class RepositoryEvidenceResponse(BaseModel):
+    # Repository identity (owner/name); ``name`` is display-only.
+    full_name: str
+    name: str
+    evidence: list[EvidenceSignalResponse]
+
+
+class DomainIntelligenceResponse(BaseModel):
+    name: str
+    strength: str
+    score: float
+    repository_count: int
+    repositories: list[RepositoryEvidenceResponse]
+
+
+class DeveloperIntelligenceResponse(BaseModel):
+    domains: list[DomainIntelligenceResponse] = Field(default_factory=list)
+
+
 class DeveloperProfileResponse(BaseModel):
     username: str
     name: str | None
@@ -109,6 +133,7 @@ class DeveloperProfileResponse(BaseModel):
     summary: DeveloperSummaryResponse
     repositories: list[RepositorySummaryResponse]
     recent_activity: list[RecentActivityResponse]
+    intelligence: DeveloperIntelligenceResponse | None = None
 
 
 class MeResponse(BaseModel):

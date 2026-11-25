@@ -324,13 +324,15 @@ body {
   border-radius: 999px;
 }
 
-.badge-high {
+.badge-high,
+.badge-strong {
   background: rgba(63, 185, 80, 0.15);
   color: var(--green);
   border: 1px solid var(--green);
 }
 
-.badge-medium {
+.badge-medium,
+.badge-moderate {
   background: rgba(210, 153, 34, 0.15);
   color: var(--yellow);
   border: 1px solid var(--yellow);
@@ -340,6 +342,12 @@ body {
   background: rgba(139, 148, 158, 0.15);
   color: var(--muted);
   border: 1px solid var(--border);
+}
+
+.badge-emerging {
+  background: rgba(88, 166, 255, 0.15);
+  color: var(--accent);
+  border: 1px solid var(--accent);
 }
 
 .score {
