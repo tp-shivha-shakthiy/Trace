@@ -6,15 +6,19 @@ into PostgreSQL, and serves an aggregated developer profile — including a
 coarse technical-domain profile — through a FastAPI backend.
 
 **TRACE is at v0.3.** This milestone delivers a real, runnable, end-to-end
-backend foundation:
+application:
 
 ```
-GitHub API → activity ingestion → asynchronous processing → PostgreSQL → developer profile API
+GitHub API → activity ingestion → asynchronous processing → PostgreSQL → developer profile API → React SPA
 ```
+
+It includes a React single-page frontend, GitHub OAuth sign-in with
+server-side sessions, and explainable deterministic domain inference
+(TRACE Intelligence V1).
 
 It does **not** yet implement the full product vision (temporal knowledge
-graph, ML skill/domain classifier, recommendations, webhooks, React frontend
-and OAuth are future work). See [Limitations & future work](#current-limitations--future-work).
+graph, ML skill/domain classifier, recommendations and webhooks are future
+work). See [Limitations & future work](#current-limitations--future-work).
 
 ---
 
@@ -168,8 +172,10 @@ frontend/
 ```
 trace/
   app/
-    api/            FastAPI routers (health, sync, developers)
-    services/       github_activity, ingestion, jobs, profiles, domains
+    api/            FastAPI routers (health, auth, sync, developers, me)
+    services/       github_activity, ingestion, jobs, profiles, domains,
+                    oauth, sessions
+    _loop.py        cross-platform asyncio event-loop policy (Windows)
     config.py       env-var configuration (pydantic-settings)
     database.py     async engine + session factory + Base
     deps.py         FastAPI dependencies
@@ -178,12 +184,17 @@ trace/
     main.py         app factory + uvicorn entry point
     models.py       SQLAlchemy ORM models
     normalizers.py  GitHub → unified event normalization
+    schema.py       schema bootstrap (create_all + additive column upgrades)
     schemas.py      Pydantic request/response models
+  frontend/         React 19 + Vite + TypeScript SPA
   docs/             architecture and design documents
-  prototype/        earlier (prototype) exploratory code
   tests/            automated test suite (runs against real PostgreSQL)
-  Dockerfile
-  docker-compose.yml
+  .github/workflows/ci.yml   CI: frontend build, ruff, pytest
+  Dockerfile                 multi-stage build (frontend + Python runtime)
+  docker-compose.yml         local PostgreSQL + backend
+  render.yaml                Render Blueprint (infrastructure as code)
+  serve.py                   launcher (applies event-loop policy, honors $PORT)
+  trace_schema.py            `python -m trace_schema` table creation helper
   requirements.txt / requirements-dev.txt
 ```
 
@@ -479,13 +490,17 @@ specification.
 | Method | Path                        | Description                                    |
 |--------|-----------------------------|------------------------------------------------|
 | GET    | `/health`                   | Liveness + DB readiness                        |
-| GET    | `/`                         | App info / docs link                           |
+| GET    | `/`                         | SPA (or app info JSON if `frontend/dist` is absent) |
 | GET    | `/auth/github`              | OAuth login: redirect to GitHub consent screen |
 | GET    | `/auth/github/callback`     | OAuth callback: connect account + auto-sync   |
+| POST   | `/auth/logout`              | Invalidate the session and clear its cookie    |
 | POST   | `/api/v1/sync`              | Enqueue async GitHub ingestion (202)           |
 | GET    | `/api/v1/sync/{job_id}`     | Query ingestion job status/counts              |
 | GET    | `/api/v1/developers`        | List ingested developers                       |
 | GET    | `/api/v1/developers/{username}` | Aggregated developer profile from PostgreSQL   |
+| DELETE | `/api/v1/developers/{username}/fetched` | Remove a developer you fetched (signed in) |
+| GET    | `/api/v1/me`                | Signed-in user's identity                      |
+| GET    | `/api/v1/me/profile`        | Signed-in user's full profile                  |
 
 The developer profile (`GET /api/v1/developers/{username}`) aggregates
 persisted data into:
@@ -521,7 +536,8 @@ Interactive docs: `GET /docs` (Swagger UI).
 - The background worker is **in-process**; queued jobs are lost on process
   restart. That is acceptable for local development — a durable broker
   (Celery/Redis, SQS, etc.) is future work.
-- Schema management uses `create_all`, not Alembic migrations.
+- Schema management uses `create_all` plus idempotent `ADD COLUMN IF NOT
+  EXISTS` upgrades (`app/schema.py`), not Alembic migrations.
 - No GitHub **webhooks** (pull-based sync only).
 - Rate limits are handled gracefully but there is no OAuth token refresh.
 - Domain inference is **deterministic and evidence-based**, not learned. It
